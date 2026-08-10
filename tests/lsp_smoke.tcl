@@ -222,6 +222,34 @@ if {![string match {*"s:"*} $hints]} {
 }
 puts "ok  inlayHint labels arguments with parameter names"
 
+# --- type hierarchy over TclOO superclasses
+set oosrc "oo::class create Base {}\noo::class create Derived {\n    superclass Base\n}\n"
+set oodoc [string map [list \n \\n \" \\\"] $oosrc]
+send $srv "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file:///oo.tcl\",\"languageId\":\"tcl\",\"version\":1,\"text\":\"$oodoc\"}}}"
+recv $srv
+send $srv {{"jsonrpc":"2.0","id":29,"method":"textDocument/prepareTypeHierarchy","params":{"textDocument":{"uri":"file:///oo.tcl"},"position":{"line":1,"character":18}}}}
+set pth [recv $srv]
+if {![string match {*::Derived*} $pth]} {
+    puts "FAIL: prepareTypeHierarchy did not anchor on Derived: $pth"; exit 1
+}
+puts "ok  prepareTypeHierarchy anchors on a TclOO class"
+
+set ooitem {{"name":"::Derived","kind":5,"uri":"file:///oo.tcl","range":{"start":{"line":1,"character":0},"end":{"line":3,"character":1}},"selectionRange":{"start":{"line":1,"character":17},"end":{"line":1,"character":24}},"data":{"qname":"::Derived"}}}
+send $srv "{\"jsonrpc\":\"2.0\",\"id\":30,\"method\":\"typeHierarchy/supertypes\",\"params\":{\"item\":$ooitem}}"
+set sup [recv $srv]
+if {![string match {*::Base*} $sup]} {
+    puts "FAIL: supertypes did not report Base: $sup"; exit 1
+}
+puts "ok  typeHierarchy/supertypes follows superclass"
+
+set baseitem {{"name":"::Base","kind":5,"uri":"file:///oo.tcl","range":{"start":{"line":0,"character":0},"end":{"line":0,"character":24}},"selectionRange":{"start":{"line":0,"character":17},"end":{"line":0,"character":21}},"data":{"qname":"::Base"}}}
+send $srv "{\"jsonrpc\":\"2.0\",\"id\":31,\"method\":\"typeHierarchy/subtypes\",\"params\":{\"item\":$baseitem}}"
+set sub [recv $srv]
+if {![string match {*::Derived*} $sub]} {
+    puts "FAIL: subtypes did not report Derived: $sub"; exit 1
+}
+puts "ok  typeHierarchy/subtypes finds derived classes"
+
 # --- codeLens shows reference counts above definitions
 send $srv {{"jsonrpc":"2.0","id":28,"method":"textDocument/codeLens","params":{"textDocument":{"uri":"file:///t.tcl"}}}}
 set lens [recv $srv]

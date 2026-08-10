@@ -45,13 +45,14 @@ per-version with bindgen rather than hand-written.
 | Inlay hints | parameter names at call sites of user procs |
 | Code actions | brace an unbraced expression; correct a misspelled Tk option; add a missing `package require` |
 | Call hierarchy | incoming calls grouped by the calling proc, and outgoing calls |
+| Type hierarchy | TclOO `superclass` and `mixin`, in both directions |
 | Code lens | workspace-wide reference count above each definition |
 | Formatting | via `tclfmt` |
 | Incremental sync | buffer is the source of truth, never the file on disk |
 | Position encoding | negotiated; UTF-8 preferred, UTF-16 correct |
 
 The workspace is indexed on startup, so definitions resolve in files you have never
-opened. Not yet implemented: on-type formatting and type hierarchy.
+opened. Not yet implemented: on-type formatting, and `snit`/`itcl` megawidgets.
 See [Roadmap](#roadmap).
 
 Name resolution follows Tcl's real rules — a `::`-prefixed name is absolute, and a bare
@@ -175,8 +176,8 @@ nix run .#regen-cmddb
   ranges, document links, signature help.
 - **Phase 3 — mostly done.** Rename, semantic tokens, inlay hints and code actions have
   landed; on-type formatting remains.
-- **Phase 4 — started.** Call hierarchy, code lens, and Tk `-option` completion *and*
-  validation have landed. Type hierarchy and `snit`/`itcl` remain.
+- **Phase 4 — mostly done.** Call hierarchy, type hierarchy, code lens, and Tk `-option`
+  completion *and* validation have landed. `snit`/`itcl` megawidgets remain.
 
 ## Prior art
 

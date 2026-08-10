@@ -28,6 +28,8 @@ pub struct Def {
     pub name_range: Range<usize>,
     pub full_range: Range<usize>,
     pub detail: Option<String>,
+    /// For a class: its `superclass` and `mixin` names, as written.
+    pub supers: Vec<String>,
     pub doc: Option<String>,
 }
 
@@ -324,6 +326,7 @@ fn flatten(symbols: &[Symbol], out: &mut Vec<Def>) {
             name_range: s.name_range.clone(),
             full_range: s.full_range.clone(),
             detail: s.detail.clone(),
+            supers: s.supers.clone(),
             doc: s.doc.clone(),
         });
         flatten(&s.children, out);

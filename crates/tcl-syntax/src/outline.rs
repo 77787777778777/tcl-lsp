@@ -33,6 +33,8 @@ pub struct Symbol {
     pub full_range: Range<usize>,
     /// Signature detail, e.g. a proc's argument list.
     pub detail: Option<String>,
+    /// For a TclOO class: the names given to `superclass` and `mixin`, as written.
+    pub supers: Vec<String>,
     /// Leading `#` comment block, if any — free documentation for hover.
     pub doc: Option<String>,
     pub children: Vec<Symbol>,
@@ -244,6 +246,7 @@ pub fn outline(script: &Script) -> Outline {
         calls: Vec::new(),
         errors: Vec::new(),
         depth: 0,
+        pending_supers: Vec::new(),
     };
     let mut symbols = Vec::new();
     let whole = 0..script.len();
@@ -270,6 +273,8 @@ struct Walker<'a> {
     calls: Vec<Call>,
     errors: Vec<SyntaxError>,
     depth: usize,
+    /// `superclass`/`mixin` names seen while walking the current class body.
+    pending_supers: Vec<String>,
 }
 
 /// Hard ceiling on nesting. Real Tcl never approaches this; it exists so that a
@@ -397,6 +402,17 @@ impl Walker<'_> {
                     }
                     into.push(sym);
                 }
+                // `superclass A B` / `mixin M` inside a class body. Recorded on the
+                // enclosing class, which the caller patches in after the walk.
+                (Mode::ClassBody, "superclass" | "mixin") => {
+                    for w in words.iter().skip(1) {
+                        if let Some(name) = literal(self.script, w) {
+                            if !name.starts_with('-') {
+                                self.pending_supers.push(name);
+                            }
+                        }
+                    }
+                }
                 (Mode::ClassBody, "variable") => {
                     for w in words.iter().skip(1) {
                         if let (Some(name), Some(r)) = (literal(self.script, w), word_range(w)) {
@@ -407,6 +423,7 @@ impl Walker<'_> {
                                 name_range: r,
                                 full_range: cmd.range.clone(),
                                 detail: None,
+                                supers: Vec::new(),
                                 doc: None,
                                 children: Vec::new(),
                             });
@@ -597,6 +614,7 @@ impl Walker<'_> {
                 .unwrap_or(cmd.range.clone()),
             full_range: cmd.range.clone(),
             detail: None,
+            supers: Vec::new(),
             doc: doc_of(self.script, cmd),
             children: Vec::new(),
         };
@@ -631,13 +649,18 @@ impl Walker<'_> {
                 .unwrap_or(cmd.range.clone()),
             full_range: cmd.range.clone(),
             detail: None,
+            supers: Vec::new(),
             doc: doc_of(self.script, cmd),
             children: Vec::new(),
         };
         if let Some(body) = words.get(3).and_then(|w| body_range(w)) {
             let mut kids = Vec::new();
+            let outer_supers = std::mem::take(&mut self.pending_supers);
             self.walk(body.clone(), &qname, Mode::ClassBody, body, &mut kids);
             sym.children = kids;
+            // Collected by the ClassBody arm while walking, then handed back so a
+            // nested class does not steal its parent superclass list.
+            sym.supers = std::mem::replace(&mut self.pending_supers, outer_supers);
         }
         into.push(sym);
     }
@@ -658,6 +681,7 @@ impl Walker<'_> {
             name_range: word_range(words[1])?,
             full_range: cmd.range.clone(),
             detail: None,
+            supers: Vec::new(),
             doc: doc_of(self.script, cmd),
             children: Vec::new(),
         })
@@ -677,6 +701,7 @@ impl Walker<'_> {
             name_range: head_range,
             full_range: cmd.range.clone(),
             detail: None,
+            supers: Vec::new(),
             doc: doc_of(self.script, cmd),
             children: Vec::new(),
         }
@@ -864,6 +889,27 @@ mod tests {
                 "::Shape::destructor"
             ]
         );
+    }
+
+    #[test]
+    fn records_superclasses_and_mixins() {
+        let o = parse(
+            "oo::class create Base {}\noo::class create Mix {}\n\
+             oo::class create Derived {\n  superclass Base\n  mixin Mix\n  method m {} {}\n}\n",
+        );
+        let d = o.symbols.iter().find(|s| s.name == "Derived").unwrap();
+        assert_eq!(d.supers, vec!["Base", "Mix"]);
+        let b = o.symbols.iter().find(|s| s.name == "Base").unwrap();
+        assert!(b.supers.is_empty());
+    }
+
+    #[test]
+    fn superclasses_do_not_leak_between_classes() {
+        let o = parse(
+            "oo::class create A {\n superclass X\n}\noo::class create B {\n method m {} {}\n}\n",
+        );
+        let b = o.symbols.iter().find(|s| s.name == "B").unwrap();
+        assert!(b.supers.is_empty(), "B inherited A's list: {:?}", b.supers);
     }
 
     #[test]

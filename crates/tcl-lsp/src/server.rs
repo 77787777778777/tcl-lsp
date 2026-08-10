@@ -16,7 +16,8 @@ use lsp_types::{
         DocumentLinkRequest, DocumentSymbolRequest, FoldingRangeRequest, Formatting,
         GotoDefinition, HoverRequest, InlayHintRequest, PrepareRenameRequest, References, Rename,
         Request as _, SelectionRangeRequest, SemanticTokensFullRequest, SemanticTokensRangeRequest,
-        SignatureHelpRequest, WorkspaceSymbolRequest,
+        SignatureHelpRequest, TypeHierarchyPrepare, TypeHierarchySubtypes, TypeHierarchySupertypes,
+        WorkspaceSymbolRequest,
     },
     *,
 };
@@ -63,7 +64,20 @@ pub fn run(connection: &Connection) -> Result<()> {
             version: Some(env!("CARGO_PKG_VERSION").to_string()),
         }),
     };
-    connection.initialize_finish(id, serde_json::to_value(init_result)?)?;
+    // lsp-types 0.97 models every type-hierarchy request but omits
+    // `typeHierarchyProvider` from ServerCapabilities, so the key is added to the
+    // serialized value directly. Clients look for exactly this name.
+    let mut init_value = serde_json::to_value(init_result)?;
+    if let Some(caps) = init_value
+        .get_mut("capabilities")
+        .and_then(|c| c.as_object_mut())
+    {
+        caps.insert(
+            "typeHierarchyProvider".to_string(),
+            serde_json::Value::Bool(true),
+        );
+    }
+    connection.initialize_finish(id, init_value)?;
 
     // Environment first, then whatever the client sent with `initialize`.
     let mut config = Config::default();
@@ -241,6 +255,15 @@ impl Server {
             }
             CodeLensRequest::METHOD => {
                 cast::<CodeLensRequest>(req).map(|(_, p)| self.code_lens(&p))
+            }
+            TypeHierarchyPrepare::METHOD => {
+                cast::<TypeHierarchyPrepare>(req).map(|(_, p)| self.prepare_type_hierarchy(&p))
+            }
+            TypeHierarchySupertypes::METHOD => {
+                cast::<TypeHierarchySupertypes>(req).map(|(_, p)| self.supertypes(&p))
+            }
+            TypeHierarchySubtypes::METHOD => {
+                cast::<TypeHierarchySubtypes>(req).map(|(_, p)| self.subtypes(&p))
             }
             CodeActionRequest::METHOD => {
                 cast::<CodeActionRequest>(req).map(|(_, p)| self.code_actions(&p))
@@ -893,6 +916,105 @@ impl Server {
         let mut out = Vec::new();
         collect_folds(&outline.symbols, li, self.encoding, &mut out);
         json(out)
+    }
+
+    /// Anchors a type-hierarchy session on the TclOO class under the cursor.
+    fn prepare_type_hierarchy(&self, p: &TypeHierarchyPrepareParams) -> serde_json::Value {
+        let uri = p
+            .text_document_position_params
+            .text_document
+            .uri
+            .to_string();
+        let Some((word, ns)) = self.word_and_ns(&uri, p.text_document_position_params.position)
+        else {
+            return serde_json::Value::Null;
+        };
+        let items: Vec<TypeHierarchyItem> = self
+            .index
+            .resolve(&word, &ns)
+            .iter()
+            .filter(|(_, d)| d.kind == TclKind::Class)
+            .filter_map(|(u, d)| self.type_item(u, d))
+            .collect();
+        if items.is_empty() {
+            return serde_json::Value::Null;
+        }
+        json(items)
+    }
+
+    fn type_item(&self, uri: &str, def: &tcl_analysis::Def) -> Option<TypeHierarchyItem> {
+        Some(TypeHierarchyItem {
+            name: def.qname.clone(),
+            kind: SymbolKind::CLASS,
+            tags: None,
+            detail: (!def.supers.is_empty())
+                .then(|| format!("superclass {}", def.supers.join(" "))),
+            uri: parse_uri(uri)?,
+            range: self.range_in(uri, def.full_range.clone())?,
+            selection_range: self.range_in(uri, def.name_range.clone())?,
+            data: Some(serde_json::json!({ "qname": def.qname })),
+        })
+    }
+
+    /// The classes a class derives from: its `superclass` and `mixin` entries.
+    fn supertypes(&self, p: &TypeHierarchySupertypesParams) -> serde_json::Value {
+        let Some(def) = self.class_of_item(&p.item) else {
+            return serde_json::Value::Null;
+        };
+        // A superclass name is written inside the class body, so it resolves
+        // relative to the class's own namespace, not the global one.
+        let ns = container_of(&def.qname);
+        let mut out = Vec::new();
+        for name in &def.supers {
+            for (u, d) in self.index.resolve(name, &ns) {
+                if d.kind == TclKind::Class {
+                    if let Some(item) = self.type_item(u, d) {
+                        out.push(item);
+                    }
+                }
+            }
+        }
+        json(out)
+    }
+
+    /// The classes that derive from a class.
+    fn subtypes(&self, p: &TypeHierarchySubtypesParams) -> serde_json::Value {
+        let Some(def) = self.class_of_item(&p.item) else {
+            return serde_json::Value::Null;
+        };
+        let target = def.qname.clone();
+        let mut out = Vec::new();
+        for (uri, f) in self.index.files() {
+            for candidate in f.defs.iter().filter(|d| d.kind == TclKind::Class) {
+                let ns = container_of(&candidate.qname);
+                let derives = candidate.supers.iter().any(|s| {
+                    self.index
+                        .resolve(s, &ns)
+                        .first()
+                        .is_some_and(|(_, d)| d.qname == target)
+                });
+                if derives {
+                    if let Some(item) = self.type_item(uri, candidate) {
+                        out.push(item);
+                    }
+                }
+            }
+        }
+        json(out)
+    }
+
+    fn class_of_item(&self, item: &TypeHierarchyItem) -> Option<tcl_analysis::Def> {
+        let qname = item
+            .data
+            .as_ref()
+            .and_then(|d| d.get("qname"))
+            .and_then(|v| v.as_str())
+            .unwrap_or(&item.name);
+        self.index
+            .resolve(qname, "::")
+            .into_iter()
+            .find(|(_, d)| d.kind == TclKind::Class)
+            .map(|(_, d)| d.clone())
     }
 
     /// Reference counts above each definition.
@@ -1722,6 +1844,14 @@ fn synopsis_parameters(label: &str) -> Vec<ParameterInformation> {
             documentation: None,
         })
         .collect()
+}
+
+/// The namespace a qualified name lives in: `::a::b::C` -> `::a::b`.
+fn container_of(qname: &str) -> String {
+    match qname.rfind("::") {
+        Some(0) | None => "::".to_string(),
+        Some(i) => qname[..i].to_string(),
+    }
 }
 
 /// The innermost proc, method, constructor or destructor containing `offset`.
