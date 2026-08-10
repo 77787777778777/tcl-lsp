@@ -181,6 +181,27 @@ buffer-local direnv environment exists."
   (skip-unless (require 'lsp-mode nil t))
   (should (functionp #'tcl-lsp-server-command)))
 
+(ert-deftest tcl-lsp-test-outranks-an-existing-tcl-client ()
+  "This client wins when another is already registered for Tcl.
+Config that predates this package commonly registers a Tcl server of its
+own, and `lsp--find-clients' keeps exactly one non-add-on client: the
+highest priority.  Ours declares 1 against the struct default of 0, so it
+is chosen without the user having to remove anything."
+  (skip-unless (require 'lsp-mode nil t))
+  (let ((lsp-clients (copy-hash-table lsp-clients)))
+    (lsp-register-client
+     (make-lsp-client
+      :new-connection (lsp-stdio-connection "true")
+      :activation-fn (lsp-activate-on "tcl")
+      :server-id 'tcl-lsp-test-rival))
+    (let* ((clients (list (gethash 'tcl-lsp-test-rival lsp-clients)
+                          (gethash 'tcl-lsp lsp-clients)))
+           (winner (car (sort clients
+                              (lambda (a b)
+                                (> (lsp--client-priority a)
+                                   (lsp--client-priority b)))))))
+      (should (eq 'tcl-lsp (lsp--client-server-id winner))))))
+
 ;;; Integration, through eglot
 
 (defvar tcl-lsp-test--workspace nil)

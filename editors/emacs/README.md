@@ -39,6 +39,19 @@ Then start the server the same way you start every other one:
 
 Use `lsp-deferred`, not `lsp` — see [direnv](#direnv-and-envrc) below.
 
+### If you already registered a Tcl client
+
+A hand-rolled `lsp-register-client` for Tcl — pointing at [jdc8/lsp]'s
+`lsp.tcl`, say — keeps matching `tcl-mode` buffers after you install this. It
+will not start a second server: `lsp--find-clients` keeps exactly one non-add-on
+client, the highest priority, and this one declares `1` against the struct
+default of `0`. So it wins with no action from you, and
+`tcl-lsp-test-outranks-an-existing-tcl-client` keeps it that way.
+
+Deleting the old registration is still tidier, and is the only way to be sure
+which one you get if you ever give the other a priority. `M-x
+lsp-describe-session` names the client actually in use.
+
 ### Nix
 
 `nix build .#emacs-tcl-lsp` produces an Emacs package with the server's store
@@ -224,4 +237,8 @@ nix build .#checks.x86_64-linux.emacs
 Byte-compiles with warnings as errors, runs `checkdoc`, and drives a real
 `tcl-lsp` process. The integration tests go through eglot because its request
 path is synchronous, which makes headless assertions deterministic; the
-lsp-mode side asserts the wiring a session depends on.
+lsp-mode side asserts the wiring a session depends on. The check fails if a
+test that needs the server or lsp-mode was skipped, since a silent skip would
+hide exactly the breakage it exists to catch.
+
+[jdc8/lsp]: https://github.com/jdc8/lsp
