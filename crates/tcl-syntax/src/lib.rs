@@ -9,11 +9,14 @@
 
 pub mod line_index;
 pub mod outline;
+pub mod selection;
 
 pub use line_index::{LineIndex, LinePos, PositionEncoding};
 pub use outline::{
-    outline, qualify, Outline, Ref, RefKind, Symbol, SymbolKind, SyntaxError, VarDef,
+    outline, qualify, split_args, LinkKind, LinkRef, Outline, Provide, Ref, RefKind, Symbol,
+    SymbolKind, SyntaxError, VarDef,
 };
+pub use selection::{command_at, selection_chain, Enclosing};
 pub use tcl_tclsys::{command_complete, ParseError, Script};
 
 /// One open document: its text, its line index, and its outline.

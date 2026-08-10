@@ -182,6 +182,20 @@ impl Index {
         out
     }
 
+    /// The file that satisfies `package require <name>`, if one is indexed.
+    ///
+    /// Resolution is by `package provide`, which is how Tcl itself decides — not by
+    /// filename, which frequently differs from the package name.
+    pub fn provider_of(&self, package: &str) -> Option<(&str, &tcl_syntax::Provide)> {
+        self.files.iter().find_map(|(uri, f)| {
+            f.outline
+                .provides
+                .iter()
+                .find(|p| p.name == package)
+                .map(|p| (uri.as_str(), p))
+        })
+    }
+
     /// Fuzzy-ish search over qualified names, for `workspace/symbol`.
     pub fn search(&self, query: &str, limit: usize) -> Vec<(&str, &Def)> {
         let q = query.to_lowercase();

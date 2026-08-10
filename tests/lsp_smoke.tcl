@@ -28,7 +28,12 @@ proc recv {ch} {
 set ws [file normalize [file join [pwd] tcl-lsp-e2e-ws]]
 file mkdir $ws
 set f [open [file join $ws lib.tcl] w]
-puts $f "# Trims whitespace.\nnamespace eval util {\n    proc trim {s} { string trim \$s }\n}"
+puts $f "package provide utillib 1.0\n# Trims whitespace.\nnamespace eval util {\n    proc trim {s} { string trim \$s }\n}"
+close $f
+
+# A second file that links to the first, for documentLink.
+set f [open [file join $ws main.tcl] w]
+puts $f "source lib.tcl\npackage require utillib\nutil::trim x"
 close $f
 
 set srv [open "|$bin 2>/dev/null" r+]
@@ -44,10 +49,11 @@ if {![string match {*"positionEncoding":"utf-8"*} $init]} {
 puts "ok  negotiated utf-8 position encoding"
 foreach cap {documentSymbolProvider definitionProvider hoverProvider workspaceSymbolProvider
              documentFormattingProvider referencesProvider documentHighlightProvider
-             foldingRangeProvider completionProvider} {
+             foldingRangeProvider completionProvider selectionRangeProvider
+             documentLinkProvider signatureHelpProvider} {
     if {![string match "*$cap*" $init]} { puts "FAIL: missing capability $cap"; exit 1 }
 }
-puts "ok  advertises the Phase 1 capability set"
+puts "ok  advertises the Phase 1 + 2 capability set"
 
 send $srv {{"jsonrpc":"2.0","method":"initialized","params":{}}}
 
@@ -130,6 +136,41 @@ if {![string match {*lib.tcl*} $wsym]} {
 }
 puts "ok  workspace scan indexed a file that was never opened"
 
+# --- selectionRange: expanding from a word outwards
+send $srv {{"jsonrpc":"2.0","id":13,"method":"textDocument/selectionRange","params":{"textDocument":{"uri":"file:///t.tcl"},"positions":[{"line":4,"character":14}]}}}
+set sel [recv $srv]
+if {![string match {*"parent"*} $sel]} {
+    puts "FAIL: selectionRange returned no nesting: $sel"; exit 1
+}
+puts "ok  selectionRange nests word inside command inside body"
+
+# --- signatureHelp for a user-defined proc
+send $srv {{"jsonrpc":"2.0","id":14,"method":"textDocument/signatureHelp","params":{"textDocument":{"uri":"file:///t.tcl"},"position":{"line":4,"character":15}}}}
+set sig [recv $srv]
+if {![string match {*::util::trim*} $sig]} {
+    puts "FAIL: no signature for util::trim: $sig"; exit 1
+}
+if {![string match {*activeParameter*} $sig]} {
+    puts "FAIL: signature help lacks an active parameter: $sig"; exit 1
+}
+puts "ok  signatureHelp shows a user proc's parameters"
+
+# --- documentLink on a real file: `source` and `package require`
+set mainuri "file://$ws/main.tcl"
+set mainsrc [string map [list \n \\n \" \\\"] "source lib.tcl\npackage require utillib\nutil::trim x\n"]
+send $srv "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"$mainuri\",\"languageId\":\"tcl\",\"version\":1,\"text\":\"$mainsrc\"}}}"
+recv $srv
+send $srv "{\"jsonrpc\":\"2.0\",\"id\":16,\"method\":\"textDocument/documentLink\",\"params\":{\"textDocument\":{\"uri\":\"$mainuri\"}}}"
+set links [recv $srv]
+if {![string match {*lib.tcl*} $links]} {
+    puts "FAIL: no documentLink for `source lib.tcl`: $links"; exit 1
+}
+set nlinks [regexp -all {"target"} $links]
+if {$nlinks < 2} {
+    puts "FAIL: expected links for both source and package require, got $nlinks: $links"; exit 1
+}
+puts "ok  documentLink resolves source paths and package require"
+
 # --- hover over a Tcl builtin comes from the generated command database
 set bsrc "lsort \[list 3 1 2\]\n"
 set bdoc2 [string map [list \n \\n \" \\\"] $bsrc]
@@ -150,6 +191,14 @@ foreach want {lsort foreach string} {
     }
 }
 puts "ok  completion offers Tcl builtins"
+
+# --- signatureHelp for a builtin comes from the man-page synopsis
+send $srv {{"jsonrpc":"2.0","id":17,"method":"textDocument/signatureHelp","params":{"textDocument":{"uri":"file:///builtin.tcl"},"position":{"line":0,"character":6}}}}
+set bsig [recv $srv]
+if {![string match {*lsort*} $bsig]} {
+    puts "FAIL: no builtin signature for lsort: $bsig"; exit 1
+}
+puts "ok  signatureHelp documents builtins from their synopsis"
 
 # --- external analysers, if they are configured. Opening a file runs them; a
 # typo'd variable is something only nagelfar catches, not our own parser.

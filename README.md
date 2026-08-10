@@ -34,13 +34,16 @@ per-version with bindgen rather than hand-written.
 | Document highlight | uses and definitions in the current file |
 | Document + workspace symbols | procs, namespaces, TclOO classes, methods, variables |
 | Folding ranges | proc, namespace and class bodies |
+| Selection ranges | expand-selection: word → command → body → definition → file |
+| Document links | `source` paths, and `package require` → its `package provide` |
+| Signature help | user procs from their argument list; builtins and ensemble subcommands from the man pages |
 | Formatting | via `tclfmt` |
 | Incremental sync | buffer is the source of truth, never the file on disk |
 | Position encoding | negotiated; UTF-8 preferred, UTF-16 correct |
 
 The workspace is indexed on startup, so definitions resolve in files you have never
-opened. Not yet implemented: rename, code actions, semantic tokens, inlay hints, call and
-type hierarchies, signature help. See [Roadmap](#roadmap).
+opened. Not yet implemented: rename, code actions, semantic tokens, inlay hints, and call
+or type hierarchies. See [Roadmap](#roadmap).
 
 Name resolution follows Tcl's real rules — a `::`-prefixed name is absolute, and a bare
 name is looked up in the current namespace and then the global one, never in the levels
@@ -143,12 +146,12 @@ nix run .#regen-cmddb
 
 ## Roadmap
 
-- **Phase 1** — incremental sync, diagnostics, document symbols, definition, hover,
+- **Phase 1 — done.** Incremental sync, diagnostics, document symbols, definition, hover,
   completion, formatting.
-- **Phase 2** — references, highlights, workspace symbols, folding, selection ranges,
-  document links, signature help.
+- **Phase 2 — done.** References, highlights, workspace symbols, folding, selection
+  ranges, document links, signature help.
 - **Phase 3** — rename, code actions, semantic tokens, inlay hints, on-type formatting.
-- **Phase 4** — call/type hierarchy, code lens, `snit`/`itcl` support.
+- **Phase 4** — call/type hierarchy, code lens, Tk `-option` validation, `snit`/`itcl`.
 
 ## Prior art
 

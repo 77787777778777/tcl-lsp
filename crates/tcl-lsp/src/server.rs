@@ -11,8 +11,9 @@ use lsp_types::{
         DidSaveTextDocument, Notification as _, PublishDiagnostics,
     },
     request::{
-        Completion, DocumentHighlightRequest, DocumentSymbolRequest, FoldingRangeRequest,
-        Formatting, GotoDefinition, HoverRequest, References, Request as _, WorkspaceSymbolRequest,
+        Completion, DocumentHighlightRequest, DocumentLinkRequest, DocumentSymbolRequest,
+        FoldingRangeRequest, Formatting, GotoDefinition, HoverRequest, References, Request as _,
+        SelectionRangeRequest, SignatureHelpRequest, WorkspaceSymbolRequest,
     },
     *,
 };
@@ -127,6 +128,18 @@ fn capabilities(encoding: PositionEncoding) -> ServerCapabilities {
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         document_formatting_provider: Some(OneOf::Left(true)),
         folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
+        selection_range_provider: Some(SelectionRangeProviderCapability::Simple(true)),
+        document_link_provider: Some(DocumentLinkOptions {
+            resolve_provider: Some(false),
+            work_done_progress_options: Default::default(),
+        }),
+        signature_help_provider: Some(SignatureHelpOptions {
+            // A space starts the next argument, which is when the active parameter
+            // advances; `[` opens a nested command with its own signature.
+            trigger_characters: Some(vec![" ".to_string(), "[".to_string()]),
+            retrigger_characters: Some(vec![" ".to_string()]),
+            work_done_progress_options: Default::default(),
+        }),
         completion_provider: Some(CompletionOptions {
             // `$` opens a variable completion; `:` catches `::` for namespaces.
             trigger_characters: Some(vec!["$".to_string(), ":".to_string()]),
@@ -172,6 +185,15 @@ impl Server {
             Completion::METHOD => cast::<Completion>(req).map(|(_, p)| self.completion(&p)),
             FoldingRangeRequest::METHOD => {
                 cast::<FoldingRangeRequest>(req).map(|(_, p)| self.folding(&p))
+            }
+            SelectionRangeRequest::METHOD => {
+                cast::<SelectionRangeRequest>(req).map(|(_, p)| self.selection_ranges(&p))
+            }
+            DocumentLinkRequest::METHOD => {
+                cast::<DocumentLinkRequest>(req).map(|(_, p)| self.document_links(&p))
+            }
+            SignatureHelpRequest::METHOD => {
+                cast::<SignatureHelpRequest>(req).map(|(_, p)| self.signature_help(&p))
             }
             WorkspaceSymbolRequest::METHOD => {
                 cast::<WorkspaceSymbolRequest>(req).map(|(_, p)| self.workspace_symbols(&p))
@@ -585,6 +607,195 @@ impl Server {
         json(out)
     }
 
+    /// "Expand selection": the chain of constructs around each requested position.
+    fn selection_ranges(&self, p: &SelectionRangeParams) -> serde_json::Value {
+        let uri = p.text_document.uri.to_string();
+        let Some(doc) = self.docs.get(&uri) else {
+            return serde_json::Value::Null;
+        };
+        let script = tcl_syntax::Script::new(doc.text());
+        let li = doc.line_index();
+
+        let out: Vec<SelectionRange> = p
+            .positions
+            .iter()
+            .map(|pos| {
+                let offset = li.offset(to_linepos(*pos), self.encoding);
+                let chain = tcl_syntax::selection_chain(&script, offset);
+                // The protocol nests these outward, so build from the largest range
+                // inwards and let each become the next one's parent.
+                let mut parent: Option<Box<SelectionRange>> = None;
+                for range in chain.iter().rev() {
+                    parent = Some(Box::new(SelectionRange {
+                        range: to_range(li, range.clone(), self.encoding),
+                        parent,
+                    }));
+                }
+                parent.map(|b| *b).unwrap_or(SelectionRange {
+                    range: Range_ {
+                        start: *pos,
+                        end: *pos,
+                    },
+                    parent: None,
+                })
+            })
+            .collect();
+        json(out)
+    }
+
+    /// Links for `source` and `package require`.
+    ///
+    /// A `source` path is resolved relative to the file it appears in, which is what
+    /// Tcl does for a relative path when the script is run from its own directory.
+    /// A `package require` resolves through the index to whichever file declares the
+    /// matching `package provide` — by declaration, not by filename.
+    fn document_links(&self, p: &DocumentLinkParams) -> serde_json::Value {
+        let uri = p.text_document.uri.to_string();
+        let Some(f) = self.index.file(&uri) else {
+            return serde_json::Value::Null;
+        };
+        let base_dir = uri_to_path(&uri).and_then(|p| p.parent().map(|d| d.to_path_buf()));
+
+        let mut out = Vec::new();
+        for link in &f.outline.links {
+            let Some(range) = self.range_in(&uri, link.range.clone()) else {
+                continue;
+            };
+            let (target, tooltip) = match link.kind {
+                tcl_syntax::LinkKind::Source => {
+                    let Some(dir) = base_dir.as_ref() else {
+                        continue;
+                    };
+                    let path = dir.join(&link.name);
+                    // Only offer a link that actually goes somewhere.
+                    if !path.exists() {
+                        continue;
+                    }
+                    (
+                        tcl_analysis::path_to_uri(&path),
+                        Some(format!("source {}", link.name)),
+                    )
+                }
+                tcl_syntax::LinkKind::PackageRequire => match self.index.provider_of(&link.name) {
+                    Some((provider, _)) => (
+                        Some(provider.to_string()),
+                        Some(format!("package provide {}", link.name)),
+                    ),
+                    None => continue,
+                },
+            };
+            let Some(target) = target.and_then(|t| parse_uri(&t)) else {
+                continue;
+            };
+            out.push(DocumentLink {
+                range,
+                target: Some(target),
+                tooltip,
+                data: None,
+            });
+        }
+        json(out)
+    }
+
+    /// Signature help for the command being typed.
+    fn signature_help(&self, p: &SignatureHelpParams) -> serde_json::Value {
+        let uri = p
+            .text_document_position_params
+            .text_document
+            .uri
+            .to_string();
+        let Some(doc) = self.docs.get(&uri) else {
+            return serde_json::Value::Null;
+        };
+        let offset = doc.line_index().offset(
+            to_linepos(p.text_document_position_params.position),
+            self.encoding,
+        );
+        let script = tcl_syntax::Script::new(doc.text());
+        let Some(enclosing) = tcl_syntax::command_at(&script, offset) else {
+            return serde_json::Value::Null;
+        };
+        let Some(name) = enclosing.name else {
+            // A dynamically-named command has no signature we can know.
+            return serde_json::Value::Null;
+        };
+        // Word 0 is the command name itself; arguments start at 1.
+        let active = enclosing.word_index.saturating_sub(1) as u32;
+
+        let ns = namespace_at(&f_symbols(self.index.file(&uri)), offset);
+        let sig = self
+            .user_signature(&name, &ns)
+            .or_else(|| self.builtin_signature(&name, &script, &enclosing.command));
+        let Some(sig) = sig else {
+            return serde_json::Value::Null;
+        };
+
+        let n_params = sig.parameters.as_ref().map(|p| p.len()).unwrap_or(0) as u32;
+        json(SignatureHelp {
+            signatures: vec![sig],
+            active_signature: Some(0),
+            active_parameter: Some(active.min(n_params.saturating_sub(1))),
+        })
+    }
+
+    /// A signature built from a user-defined proc's argument list.
+    fn user_signature(&self, name: &str, ns: &str) -> Option<SignatureInformation> {
+        let hits = self.index.resolve(name, ns);
+        let (_, def) = hits.first()?;
+        let args = def.detail.clone().unwrap_or_default();
+        let params: Vec<ParameterInformation> = tcl_syntax::split_args(&args)
+            .into_iter()
+            .map(|p| ParameterInformation {
+                label: ParameterLabel::Simple(p),
+                documentation: None,
+            })
+            .collect();
+        Some(SignatureInformation {
+            label: def.signature(),
+            documentation: def.doc.clone().map(Documentation::String),
+            parameters: Some(params),
+            active_parameter: None,
+        })
+    }
+
+    /// A signature from the man-page database, including ensemble subcommands.
+    fn builtin_signature(
+        &self,
+        name: &str,
+        script: &tcl_syntax::Script,
+        cmd: &tcl_tclsys::Command,
+    ) -> Option<SignatureInformation> {
+        let builtin = self.kb.get(name)?;
+
+        // `string compare ...` — prefer the subcommand's own signature when the
+        // second word names one.
+        let sub = cmd
+            .words()
+            .get(1)
+            .and_then(|w| w.first())
+            .and_then(|t| script.text(t.range()))
+            .and_then(|s| self.kb.subcommand(name, s));
+
+        let label = match sub {
+            Some(s) => s.signature.clone(),
+            None => builtin
+                .synopsis
+                .first()
+                .cloned()
+                .unwrap_or_else(|| builtin.name.clone()),
+        };
+        let doc = match sub {
+            Some(s) if !s.doc.is_empty() => s.doc.clone(),
+            _ => builtin.summary.clone(),
+        };
+        Some(SignatureInformation {
+            parameters: Some(synopsis_parameters(&label)),
+            label,
+            documentation: Some(Documentation::String(doc)),
+            active_parameter: None,
+        })
+    }
+
     /// Formats the buffer with `tclfmt`, if it is available.
     fn formatting(&self, p: &DocumentFormattingParams) -> serde_json::Value {
         let uri = p.text_document.uri.to_string();
@@ -747,6 +958,26 @@ fn collect_folds(
         }
         collect_folds(&s.children, li, enc, out);
     }
+}
+
+/// The symbols of an indexed file, or nothing when it is not indexed.
+fn f_symbols(file: Option<&tcl_analysis::FileIndex>) -> Vec<Symbol> {
+    file.map(|f| f.outline.symbols.clone()).unwrap_or_default()
+}
+
+/// Splits a documented synopsis into parameter labels.
+///
+/// Man-page synopses read like `lsort ?options? list`, so each whitespace-separated
+/// word after the command name is one parameter, `?…?` marking it optional.
+fn synopsis_parameters(label: &str) -> Vec<ParameterInformation> {
+    label
+        .split_whitespace()
+        .skip(1)
+        .map(|w| ParameterInformation {
+            label: ParameterLabel::Simple(w.to_string()),
+            documentation: None,
+        })
+        .collect()
 }
 
 /// The innermost namespace or class whose body contains `offset`.

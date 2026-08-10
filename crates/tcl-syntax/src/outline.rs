@@ -67,6 +67,31 @@ pub struct VarDef {
     pub scope: Range<usize>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkKind {
+    /// `source path` — a file pulled into this one.
+    Source,
+    /// `package require name` — satisfied by whichever file provides it.
+    PackageRequire,
+}
+
+/// A navigable reference to another file.
+#[derive(Debug, Clone)]
+pub struct LinkRef {
+    pub kind: LinkKind,
+    /// The literal path or package name. Only static literals are recorded; a
+    /// computed `source [file join $dir x.tcl]` is deliberately skipped.
+    pub name: String,
+    pub range: Range<usize>,
+}
+
+/// A `package provide NAME` declaration, which is what a `require` resolves to.
+#[derive(Debug, Clone)]
+pub struct Provide {
+    pub name: String,
+    pub range: Range<usize>,
+}
+
 /// A syntax error, reported at a byte range.
 #[derive(Debug, Clone)]
 pub struct SyntaxError {
@@ -84,6 +109,8 @@ pub struct Outline {
     pub symbols: Vec<Symbol>,
     pub refs: Vec<Ref>,
     pub variables: Vec<VarDef>,
+    pub links: Vec<LinkRef>,
+    pub provides: Vec<Provide>,
     pub errors: Vec<SyntaxError>,
 }
 
@@ -121,7 +148,7 @@ fn last_segment(name: &str) -> &str {
 /// Returns `None` when the word involves substitution (`$x`, `[f]`), which is the
 /// single most important gate in the whole analyzer: a name that is not a static
 /// literal cannot be resolved, and must never be guessed at.
-fn literal(script: &Script, word: &[Token]) -> Option<String> {
+pub(crate) fn literal(script: &Script, word: &[Token]) -> Option<String> {
     let head = word.first()?;
     match head.kind {
         TokenKind::SimpleWord => {
@@ -145,7 +172,7 @@ fn literal(script: &Script, word: &[Token]) -> Option<String> {
 }
 
 /// The byte range of a word's *contents*, i.e. inside any braces or quotes.
-fn body_range(word: &[Token]) -> Option<Range<usize>> {
+pub(crate) fn body_range(word: &[Token]) -> Option<Range<usize>> {
     let head = word.first()?;
     match head.kind {
         // `{...}` and `"..."` produce a head token spanning the delimiters and a
@@ -157,7 +184,7 @@ fn body_range(word: &[Token]) -> Option<Range<usize>> {
 }
 
 /// The range of a word's first token, used to anchor names.
-fn word_range(word: &[Token]) -> Option<Range<usize>> {
+pub(crate) fn word_range(word: &[Token]) -> Option<Range<usize>> {
     word.first().map(|t| t.range())
 }
 
@@ -195,6 +222,8 @@ pub fn outline(script: &Script) -> Outline {
         script,
         refs: Vec::new(),
         variables: Vec::new(),
+        links: Vec::new(),
+        provides: Vec::new(),
         errors: Vec::new(),
         depth: 0,
     };
@@ -205,6 +234,8 @@ pub fn outline(script: &Script) -> Outline {
         symbols,
         refs: w.refs,
         variables: w.variables,
+        links: w.links,
+        provides: w.provides,
         errors: w.errors,
     }
 }
@@ -213,6 +244,8 @@ struct Walker<'a> {
     script: &'a Script,
     refs: Vec<Ref>,
     variables: Vec<VarDef>,
+    links: Vec<LinkRef>,
+    provides: Vec<Provide>,
     errors: Vec<SyntaxError>,
     depth: usize,
 }
@@ -362,6 +395,37 @@ impl Walker<'_> {
                         let mut kids = Vec::new();
                         self.walk(body, ns, Mode::Script, scope.clone(), &mut kids);
                         into.append(&mut kids);
+                    }
+                }
+                // `source ?-encoding enc? filename`
+                (Mode::Script, "source") => {
+                    if let Some(w) = words.last() {
+                        if let (Some(name), Some(r)) = (literal(self.script, w), word_range(w)) {
+                            if words.len() > 1 && !name.starts_with('-') {
+                                self.links.push(LinkRef {
+                                    kind: LinkKind::Source,
+                                    name,
+                                    range: r,
+                                });
+                            }
+                        }
+                    }
+                }
+                (Mode::Script, "package") => {
+                    let sub = words.get(1).and_then(|w| literal(self.script, w));
+                    let arg = words.get(2);
+                    if let (Some(sub), Some(w)) = (sub, arg) {
+                        if let (Some(name), Some(r)) = (literal(self.script, w), word_range(w)) {
+                            match sub.as_str() {
+                                "require" => self.links.push(LinkRef {
+                                    kind: LinkKind::PackageRequire,
+                                    name,
+                                    range: r,
+                                }),
+                                "provide" => self.provides.push(Provide { name, range: r }),
+                                _ => {}
+                            }
+                        }
                     }
                 }
                 (Mode::Script, "lassign") => {
@@ -635,14 +699,14 @@ fn script_args(head: &str, words: &[&[Token]], script: &Script) -> Vec<usize> {
 }
 
 /// True when a word was written in braces, i.e. it is a script rather than a value.
-fn is_braced(script: &Script, word: &[Token]) -> bool {
+pub(crate) fn is_braced(script: &Script, word: &[Token]) -> bool {
     word.first()
         .and_then(|t| script.text(t.range()))
         .is_some_and(|s| s.starts_with('{'))
 }
 
 /// Splits a Tcl argument list, where an element may be `name` or `{name default}`.
-fn split_args(args: &str) -> Vec<String> {
+pub fn split_args(args: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut depth = 0usize;
     let mut cur = String::new();
@@ -864,6 +928,48 @@ mod tests {
         for want in ["k", "v", "p", "q"] {
             assert!(names.contains(&want), "missing {want} in {names:?}");
         }
+    }
+
+    // --- links ------------------------------------------------------------
+
+    #[test]
+    fn records_source_and_package_links() {
+        let o = parse("source lib/util.tcl\npackage require json 1.2\npackage provide mine 1.0\n");
+        let src = o
+            .links
+            .iter()
+            .find(|l| l.kind == LinkKind::Source)
+            .expect("a source link");
+        assert_eq!(src.name, "lib/util.tcl");
+        let req = o
+            .links
+            .iter()
+            .find(|l| l.kind == LinkKind::PackageRequire)
+            .expect("a package require");
+        assert_eq!(req.name, "json");
+        assert_eq!(o.provides.len(), 1);
+        assert_eq!(o.provides[0].name, "mine");
+    }
+
+    #[test]
+    fn source_link_skips_the_encoding_option() {
+        let o = parse("source -encoding utf-8 a.tcl\n");
+        assert_eq!(o.links.len(), 1);
+        assert_eq!(o.links[0].name, "a.tcl");
+    }
+
+    /// A computed path cannot be resolved, so it must not be offered as a link.
+    #[test]
+    fn skips_computed_source_paths() {
+        let o = parse("source [file join $dir x.tcl]\n");
+        assert!(o.links.is_empty(), "got {:?}", o.links);
+    }
+
+    #[test]
+    fn link_ranges_point_at_the_argument() {
+        let src = "source lib/util.tcl\n";
+        let o = parse(src);
+        assert_eq!(&src[o.links[0].range.clone()], "lib/util.tcl");
     }
 
     #[test]
