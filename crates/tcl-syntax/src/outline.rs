@@ -85,6 +85,19 @@ pub struct LinkRef {
     pub range: Range<usize>,
 }
 
+/// A call site with its argument positions, for parameter-name inlay hints.
+///
+/// Only recorded where the walker knows it is in genuine script context, so an
+/// expression like `if {$a ne {}}` never contributes phantom calls.
+#[derive(Debug, Clone)]
+pub struct Call {
+    pub name: String,
+    pub name_range: Range<usize>,
+    /// Byte range of each argument word, excluding the command name itself.
+    pub args: Vec<Range<usize>>,
+    pub namespace: String,
+}
+
 /// A `package provide NAME` declaration, which is what a `require` resolves to.
 #[derive(Debug, Clone)]
 pub struct Provide {
@@ -111,6 +124,9 @@ pub struct Outline {
     pub variables: Vec<VarDef>,
     pub links: Vec<LinkRef>,
     pub provides: Vec<Provide>,
+    /// Comment blocks, for semantic highlighting.
+    pub comments: Vec<Range<usize>>,
+    pub calls: Vec<Call>,
     pub errors: Vec<SyntaxError>,
 }
 
@@ -224,6 +240,8 @@ pub fn outline(script: &Script) -> Outline {
         variables: Vec::new(),
         links: Vec::new(),
         provides: Vec::new(),
+        comments: Vec::new(),
+        calls: Vec::new(),
         errors: Vec::new(),
         depth: 0,
     };
@@ -236,6 +254,8 @@ pub fn outline(script: &Script) -> Outline {
         variables: w.variables,
         links: w.links,
         provides: w.provides,
+        comments: w.comments,
+        calls: w.calls,
         errors: w.errors,
     }
 }
@@ -246,6 +266,8 @@ struct Walker<'a> {
     variables: Vec<VarDef>,
     links: Vec<LinkRef>,
     provides: Vec<Provide>,
+    comments: Vec<Range<usize>>,
+    calls: Vec<Call>,
     errors: Vec<SyntaxError>,
     depth: usize,
 }
@@ -298,6 +320,11 @@ impl Walker<'_> {
                 }
             };
 
+            if let Some(c) = cmd.comment.clone() {
+                if !self.comments.contains(&c) {
+                    self.comments.push(c);
+                }
+            }
             self.collect_variable_refs(&cmd, ns);
 
             let words = cmd.words();
@@ -311,7 +338,13 @@ impl Walker<'_> {
                 self.refs.push(Ref {
                     kind: RefKind::Command,
                     name: head.clone(),
-                    range: r,
+                    range: r.clone(),
+                    namespace: ns.to_string(),
+                });
+                self.calls.push(Call {
+                    name: head.clone(),
+                    name_range: r,
+                    args: words.iter().skip(1).filter_map(|w| word_range(w)).collect(),
                     namespace: ns.to_string(),
                 });
             }

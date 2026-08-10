@@ -37,13 +37,16 @@ per-version with bindgen rather than hand-written.
 | Selection ranges | expand-selection: word → command → body → definition → file |
 | Document links | `source` paths, and `package require` → its `package provide` |
 | Signature help | user procs from their argument list; builtins and ensemble subcommands from the man pages |
+| Rename | definition plus every call site; rewrites only the last segment of a qualified name |
+| Semantic tokens | full and range; user procs distinguished from Tcl's own commands |
+| Inlay hints | parameter names at call sites of user procs |
 | Formatting | via `tclfmt` |
 | Incremental sync | buffer is the source of truth, never the file on disk |
 | Position encoding | negotiated; UTF-8 preferred, UTF-16 correct |
 
 The workspace is indexed on startup, so definitions resolve in files you have never
-opened. Not yet implemented: rename, code actions, semantic tokens, inlay hints, and call
-or type hierarchies. See [Roadmap](#roadmap).
+opened. Not yet implemented: code actions, on-type formatting, and call or type
+hierarchies. See [Roadmap](#roadmap).
 
 Name resolution follows Tcl's real rules — a `::`-prefixed name is absolute, and a bare
 name is looked up in the current namespace and then the global one, never in the levels
@@ -150,7 +153,8 @@ nix run .#regen-cmddb
   completion, formatting.
 - **Phase 2 — done.** References, highlights, workspace symbols, folding, selection
   ranges, document links, signature help.
-- **Phase 3** — rename, code actions, semantic tokens, inlay hints, on-type formatting.
+- **Phase 3 — mostly done.** Rename, semantic tokens and inlay hints have landed; code
+  actions and on-type formatting remain.
 - **Phase 4** — call/type hierarchy, code lens, Tk `-option` validation, `snit`/`itcl`.
 
 ## Prior art

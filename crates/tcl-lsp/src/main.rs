@@ -9,6 +9,7 @@
 #![deny(clippy::print_stdout)]
 
 mod external;
+mod semantic;
 mod server;
 
 use anyhow::Result;

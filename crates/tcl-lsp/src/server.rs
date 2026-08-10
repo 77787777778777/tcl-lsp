@@ -12,8 +12,10 @@ use lsp_types::{
     },
     request::{
         Completion, DocumentHighlightRequest, DocumentLinkRequest, DocumentSymbolRequest,
-        FoldingRangeRequest, Formatting, GotoDefinition, HoverRequest, References, Request as _,
-        SelectionRangeRequest, SignatureHelpRequest, WorkspaceSymbolRequest,
+        FoldingRangeRequest, Formatting, GotoDefinition, HoverRequest, InlayHintRequest,
+        PrepareRenameRequest, References, Rename, Request as _, SelectionRangeRequest,
+        SemanticTokensFullRequest, SemanticTokensRangeRequest, SignatureHelpRequest,
+        WorkspaceSymbolRequest,
     },
     *,
 };
@@ -140,6 +142,22 @@ fn capabilities(encoding: PositionEncoding) -> ServerCapabilities {
             retrigger_characters: Some(vec![" ".to_string()]),
             work_done_progress_options: Default::default(),
         }),
+        semantic_tokens_provider: Some(SemanticTokensServerCapabilities::SemanticTokensOptions(
+            SemanticTokensOptions {
+                legend: SemanticTokensLegend {
+                    token_types: crate::semantic::TOKEN_TYPES.to_vec(),
+                    token_modifiers: vec![SemanticTokenModifier::DECLARATION],
+                },
+                full: Some(SemanticTokensFullOptions::Bool(true)),
+                range: Some(true),
+                work_done_progress_options: Default::default(),
+            },
+        )),
+        inlay_hint_provider: Some(OneOf::Left(true)),
+        rename_provider: Some(OneOf::Right(RenameOptions {
+            prepare_provider: Some(true),
+            work_done_progress_options: Default::default(),
+        })),
         completion_provider: Some(CompletionOptions {
             // `$` opens a variable completion; `:` catches `::` for namespaces.
             trigger_characters: Some(vec!["$".to_string(), ":".to_string()]),
@@ -194,6 +212,19 @@ impl Server {
             }
             SignatureHelpRequest::METHOD => {
                 cast::<SignatureHelpRequest>(req).map(|(_, p)| self.signature_help(&p))
+            }
+            PrepareRenameRequest::METHOD => {
+                cast::<PrepareRenameRequest>(req).map(|(_, p)| self.prepare_rename(&p))
+            }
+            Rename::METHOD => cast::<Rename>(req).map(|(_, p)| self.rename(&p)),
+            InlayHintRequest::METHOD => {
+                cast::<InlayHintRequest>(req).map(|(_, p)| self.inlay_hints(&p))
+            }
+            SemanticTokensFullRequest::METHOD => {
+                cast::<SemanticTokensFullRequest>(req).map(|(_, p)| self.semantic_tokens(&p))
+            }
+            SemanticTokensRangeRequest::METHOD => {
+                cast::<SemanticTokensRangeRequest>(req).map(|(_, p)| self.semantic_tokens_range(&p))
             }
             WorkspaceSymbolRequest::METHOD => {
                 cast::<WorkspaceSymbolRequest>(req).map(|(_, p)| self.workspace_symbols(&p))
@@ -607,6 +638,236 @@ impl Server {
         json(out)
     }
 
+    /// Parameter-name hints at call sites of user-defined procs.
+    ///
+    /// Not emitted for builtins: a man-page synopsis names arguments for a human
+    /// reader (`?options?`), not in a form that reads well inline.
+    fn inlay_hints(&self, p: &InlayHintParams) -> serde_json::Value {
+        let uri = p.text_document.uri.to_string();
+        let Some(doc) = self.docs.get(&uri) else {
+            return serde_json::Value::Null;
+        };
+        let li = doc.line_index();
+        let from = li.offset(to_linepos(p.range.start), self.encoding);
+        let to = li.offset(to_linepos(p.range.end), self.encoding);
+
+        let outline = doc.outline();
+        let mut out: Vec<InlayHint> = Vec::new();
+        for call in &outline.calls {
+            if call.name_range.start < from || call.name_range.start > to {
+                continue;
+            }
+            let hits = self.index.resolve(&call.name, &call.namespace);
+            let Some((_, def)) = hits.first() else {
+                continue;
+            };
+            let Some(detail) = def.detail.as_deref() else {
+                continue;
+            };
+            let params = tcl_syntax::split_args(detail);
+            for (i, arg) in call.args.iter().enumerate() {
+                let Some(name) = params.get(i) else { break };
+                // `args` swallows everything that follows, so a positional label
+                // past that point would be a lie.
+                if name == "args" {
+                    break;
+                }
+                out.push(InlayHint {
+                    position: to_position(li, arg.start, self.encoding),
+                    label: InlayHintLabel::String(format!("{name}:")),
+                    kind: Some(InlayHintKind::PARAMETER),
+                    text_edits: None,
+                    tooltip: None,
+                    padding_left: None,
+                    padding_right: Some(true),
+                    data: None,
+                });
+            }
+        }
+        json(out)
+    }
+
+    fn semantic_tokens(&self, p: &SemanticTokensParams) -> serde_json::Value {
+        let uri = p.text_document.uri.to_string();
+        let Some(doc) = self.docs.get(&uri) else {
+            return serde_json::Value::Null;
+        };
+        let data = crate::semantic::tokens(
+            &doc.outline(),
+            doc.text(),
+            doc.line_index(),
+            self.encoding,
+            |name| self.kb.get(name).is_some(),
+        );
+        json(SemanticTokens {
+            result_id: None,
+            data,
+        })
+    }
+
+    /// Range variant. The tokens are computed for the whole file and filtered,
+    /// which keeps the delta encoding valid without a second code path.
+    fn semantic_tokens_range(&self, p: &SemanticTokensRangeParams) -> serde_json::Value {
+        let uri = p.text_document.uri.to_string();
+        let Some(doc) = self.docs.get(&uri) else {
+            return serde_json::Value::Null;
+        };
+        let all = crate::semantic::tokens(
+            &doc.outline(),
+            doc.text(),
+            doc.line_index(),
+            self.encoding,
+            |name| self.kb.get(name).is_some(),
+        );
+
+        // Re-walk the deltas to absolute lines so the requested window can be cut
+        // out, then re-encode relative to the first token kept.
+        let (from, to) = (p.range.start.line, p.range.end.line);
+        let mut abs_line = 0u32;
+        let mut abs_start = 0u32;
+        let mut out: Vec<SemanticToken> = Vec::new();
+        let (mut prev_line, mut prev_start) = (0u32, 0u32);
+        for t in all {
+            abs_line += t.delta_line;
+            abs_start = if t.delta_line == 0 {
+                abs_start + t.delta_start
+            } else {
+                t.delta_start
+            };
+            if abs_line < from || abs_line > to {
+                continue;
+            }
+            let delta_line = abs_line - prev_line;
+            out.push(SemanticToken {
+                delta_line,
+                delta_start: if delta_line == 0 {
+                    abs_start - prev_start
+                } else {
+                    abs_start
+                },
+                ..t
+            });
+            prev_line = abs_line;
+            prev_start = abs_start;
+        }
+        json(SemanticTokens {
+            result_id: None,
+            data: out,
+        })
+    }
+
+    /// Every site that renaming `word` would have to touch, as byte ranges.
+    ///
+    /// Only the *last segment* of a qualified name is returned. Renaming `trim` to
+    /// `strip` must turn `util::trim` into `util::strip`, not replace the whole
+    /// qualified name and break the reference.
+    fn rename_sites(&self, word: &str, ns: &str) -> Vec<(String, Range<usize>)> {
+        let hits = self.index.resolve(word, ns);
+        let Some((_, first)) = hits.first() else {
+            return Vec::new();
+        };
+        let qname = first.qname.clone();
+
+        let mut sites: Vec<(String, Range<usize>)> = Vec::new();
+        for (uri, def) in &hits {
+            sites.push((uri.to_string(), tail_range(&def.name_range, &def.name)));
+        }
+        for loc in self.index.references(&qname) {
+            let Some(f) = self.index.file(&loc.uri) else {
+                continue;
+            };
+            // Recover the text as written, so the tail length is right.
+            let written = f
+                .outline
+                .refs
+                .iter()
+                .find(|r| r.range == loc.range)
+                .map(|r| r.name.clone())
+                .unwrap_or_default();
+            let tail = written.rsplit("::").next().unwrap_or(&written).to_string();
+            if tail.is_empty() {
+                continue;
+            }
+            sites.push((loc.uri.clone(), tail_range(&loc.range, &tail)));
+        }
+        sites.sort_by_key(|(uri, range)| (uri.clone(), range.start));
+        sites.dedup();
+        sites
+    }
+
+    /// Reports whether the symbol under the cursor can be renamed, and where.
+    fn prepare_rename(&self, p: &TextDocumentPositionParams) -> serde_json::Value {
+        let uri = p.text_document.uri.to_string();
+        let Some((word, ns)) = self.word_and_ns(&uri, p.position) else {
+            return serde_json::Value::Null;
+        };
+        // A builtin has no definition in the workspace, so there is nothing we could
+        // consistently rewrite. Better to decline than to half-rename.
+        if self.index.resolve(&word, &ns).is_empty() {
+            return serde_json::Value::Null;
+        }
+        let tail = word.rsplit("::").next().unwrap_or(&word).to_string();
+        let Some(doc) = self.docs.get(&uri) else {
+            return serde_json::Value::Null;
+        };
+        let offset = doc
+            .line_index()
+            .offset(to_linepos(p.position), self.encoding);
+        let Some(full) = word_range_at(doc.text(), offset) else {
+            return serde_json::Value::Null;
+        };
+        let range = tail_range(&full, &tail);
+        json(PrepareRenameResponse::RangeWithPlaceholder {
+            range: to_range(doc.line_index(), range, self.encoding),
+            placeholder: tail,
+        })
+    }
+
+    // `WorkspaceEdit::changes` is defined by lsp-types as `HashMap<Uri, _>`, and
+    // `Uri` caches its parsed components behind interior mutability. We never mutate
+    // a key, and the map is built from plain strings below, so the lint has nothing
+    // to bite on here — but the protocol type leaves no way to avoid it.
+    #[allow(clippy::mutable_key_type)]
+    fn rename(&self, p: &RenameParams) -> serde_json::Value {
+        let uri = p.text_document_position.text_document.uri.to_string();
+        let Some((word, ns)) = self.word_and_ns(&uri, p.text_document_position.position) else {
+            return serde_json::Value::Null;
+        };
+        let new_name = p.new_name.trim();
+        // A Tcl command name may hold almost anything, but a rename that introduces
+        // whitespace or a separator would silently change the meaning of every call
+        // site, so refuse rather than corrupt the code.
+        if new_name.is_empty() || new_name.contains(char::is_whitespace) || new_name.contains("::")
+        {
+            eprintln!("refusing rename to {new_name:?}: not a simple command name");
+            return serde_json::Value::Null;
+        }
+
+        // Grouped by URI *string*: `lsp_types::Uri` has interior mutability (it
+        // caches its parsed components), which makes it unsound as a hash key.
+        let mut by_uri: HashMap<String, Vec<TextEdit>> = HashMap::new();
+        for (site_uri, range) in self.rename_sites(&word, &ns) {
+            let Some(range) = self.range_in(&site_uri, range) else {
+                continue;
+            };
+            by_uri.entry(site_uri).or_default().push(TextEdit {
+                range,
+                new_text: new_name.to_string(),
+            });
+        }
+        let changes: HashMap<Uri, Vec<TextEdit>> = by_uri
+            .into_iter()
+            .filter_map(|(uri, edits)| parse_uri(&uri).map(|u| (u, edits)))
+            .collect();
+        if changes.is_empty() {
+            return serde_json::Value::Null;
+        }
+        json(WorkspaceEdit {
+            changes: Some(changes),
+            ..Default::default()
+        })
+    }
+
     /// "Expand selection": the chain of constructs around each requested position.
     fn selection_ranges(&self, p: &SelectionRangeParams) -> serde_json::Value {
         let uri = p.text_document.uri.to_string();
@@ -1000,6 +1261,27 @@ fn namespace_at(symbols: &[Symbol], offset: usize) -> String {
     let mut best = "::".to_string();
     rec(symbols, offset, "::", &mut best);
     best
+}
+
+/// The sub-range covering just the final `::`-separated segment of a name.
+fn tail_range(full: &Range<usize>, tail: &str) -> Range<usize> {
+    let start = full.end.saturating_sub(tail.len()).max(full.start);
+    start..full.end
+}
+
+/// Byte range of the identifier surrounding an offset.
+fn word_range_at(text: &str, offset: usize) -> Option<Range<usize>> {
+    let bytes = text.as_bytes();
+    let is_word = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b':';
+    let mut start = offset.min(bytes.len());
+    while start > 0 && is_word(bytes[start - 1]) {
+        start -= 1;
+    }
+    let mut end = offset.min(bytes.len());
+    while end < bytes.len() && is_word(bytes[end]) {
+        end += 1;
+    }
+    (start < end).then_some(start..end)
 }
 
 /// The Tcl identifier surrounding a byte offset, including `::` separators.

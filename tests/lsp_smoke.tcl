@@ -50,10 +50,11 @@ puts "ok  negotiated utf-8 position encoding"
 foreach cap {documentSymbolProvider definitionProvider hoverProvider workspaceSymbolProvider
              documentFormattingProvider referencesProvider documentHighlightProvider
              foldingRangeProvider completionProvider selectionRangeProvider
-             documentLinkProvider signatureHelpProvider} {
+             documentLinkProvider signatureHelpProvider renameProvider
+             semanticTokensProvider inlayHintProvider} {
     if {![string match "*$cap*" $init]} { puts "FAIL: missing capability $cap"; exit 1 }
 }
-puts "ok  advertises the Phase 1 + 2 capability set"
+puts "ok  advertises the full capability set"
 
 send $srv {{"jsonrpc":"2.0","method":"initialized","params":{}}}
 
@@ -170,6 +171,56 @@ if {$nlinks < 2} {
     puts "FAIL: expected links for both source and package require, got $nlinks: $links"; exit 1
 }
 puts "ok  documentLink resolves source paths and package require"
+
+# --- prepareRename offers just the final segment of a qualified name
+send $srv {{"jsonrpc":"2.0","id":18,"method":"textDocument/prepareRename","params":{"textDocument":{"uri":"file:///t.tcl"},"position":{"line":4,"character":12}}}}
+set prep [recv $srv]
+if {![string match {*"placeholder":"trim"*} $prep]} {
+    puts "FAIL: prepareRename should offer 'trim', got: $prep"; exit 1
+}
+puts "ok  prepareRename targets the last segment of a qualified name"
+
+# --- rename rewrites the definition and every call site
+send $srv {{"jsonrpc":"2.0","id":19,"method":"textDocument/rename","params":{"textDocument":{"uri":"file:///t.tcl"},"position":{"line":4,"character":12},"newName":"strip"}}}
+set ren [recv $srv]
+if {![string match {*"newText":"strip"*} $ren]} {
+    puts "FAIL: rename produced no edits: $ren"; exit 1
+}
+set nedits [regexp -all {"newText"} $ren]
+if {$nedits < 3} {
+    puts "FAIL: expected the definition plus two call sites, got $nedits: $ren"; exit 1
+}
+puts "ok  rename rewrites the definition and all call sites"
+
+# --- rename refuses a name that would change the meaning of call sites
+send $srv {{"jsonrpc":"2.0","id":20,"method":"textDocument/rename","params":{"textDocument":{"uri":"file:///t.tcl"},"position":{"line":4,"character":12},"newName":"bad name"}}}
+set badren [recv $srv]
+if {![string match {*"result":null*} $badren]} {
+    puts "FAIL: rename should refuse a name with whitespace: $badren"; exit 1
+}
+puts "ok  rename refuses a name containing whitespace"
+
+# --- semanticTokens
+send $srv {{"jsonrpc":"2.0","id":21,"method":"textDocument/semanticTokens/full","params":{"textDocument":{"uri":"file:///t.tcl"}}}}
+set sem [recv $srv]
+if {![string match {*"data"*} $sem]} { puts "FAIL: no semantic tokens: $sem"; exit 1 }
+# Five integers per token, so the array length must be a multiple of five.
+if {![regexp {"data":\[([^\]]*)\]} $sem -> nums]} {
+    puts "FAIL: could not read the token array: $sem"; exit 1
+}
+set count [llength [split $nums ,]]
+if {$count == 0 || $count % 5 != 0} {
+    puts "FAIL: token array length $count is not a multiple of 5"; exit 1
+}
+puts "ok  semanticTokens returns a well-formed delta-encoded array"
+
+# --- inlayHint shows parameter names at call sites
+send $srv {{"jsonrpc":"2.0","id":22,"method":"textDocument/inlayHint","params":{"textDocument":{"uri":"file:///t.tcl"},"range":{"start":{"line":0,"character":0},"end":{"line":10,"character":0}}}}}
+set hints [recv $srv]
+if {![string match {*"s:"*} $hints]} {
+    puts "FAIL: expected a parameter hint 's:' for util::trim, got: $hints"; exit 1
+}
+puts "ok  inlayHint labels arguments with parameter names"
 
 # --- hover over a Tcl builtin comes from the generated command database
 set bsrc "lsort \[list 3 1 2\]\n"
