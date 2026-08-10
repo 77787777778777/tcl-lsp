@@ -43,7 +43,7 @@ per-version with bindgen rather than hand-written.
 | Rename | definition plus every call site; rewrites only the last segment of a qualified name |
 | Semantic tokens | full and range; user procs distinguished from Tcl's own commands |
 | Inlay hints | parameter names at call sites of user procs |
-| Code actions | brace an unbraced expression; add a missing `package require` |
+| Code actions | brace an unbraced expression; correct a misspelled Tk option; add a missing `package require` |
 | Call hierarchy | incoming calls grouped by the calling proc, and outgoing calls |
 | Code lens | workspace-wide reference count above each definition |
 | Formatting | via `tclfmt` |
@@ -62,7 +62,7 @@ Diagnostics come from three independently toggleable sources:
 
 | Source | Provides |
 |---|---|
-| built-in analysis | parse errors, and unbraced expressions in `expr`/`if`/`while`/`for` |
+| built-in analysis | parse errors, unbraced expressions in `expr`/`if`/`while`/`for`, and unknown Tk widget options |
 | [nagelfar] | unknown variables, bad `expr`, wrong argument counts, invalid builtin options |
 | [tclint] | style and lint rules (already reports precise columns) |
 
@@ -175,11 +175,8 @@ nix run .#regen-cmddb
   ranges, document links, signature help.
 - **Phase 3 — mostly done.** Rename, semantic tokens, inlay hints and code actions have
   landed; on-type formatting remains.
-- **Phase 4 — started.** Call hierarchy, code lens and Tk `-option` completion have
-  landed. Type hierarchy and `snit`/`itcl` remain. Validating Tk options is deliberately
-  still open: a widget also inherits the standard options listed via `.SO`, which the
-  generator does not yet resolve, so flagging an unknown option today would fire on
-  correct code.
+- **Phase 4 — started.** Call hierarchy, code lens, and Tk `-option` completion *and*
+  validation have landed. Type hierarchy and `snit`/`itcl` remain.
 
 ## Prior art
 

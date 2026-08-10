@@ -125,9 +125,15 @@
               # tcllib is 600+ files of valid, real-world Tcl. Because it is valid by
               # construction, any parse error the corpus test reports is our bug.
               TCL_LSP_CORPUS = "${pkgs.tclPackages.tcllib}/lib/tcllib${pkgs.tclPackages.tcllib.version}";
+              # Tk's own library is correct Tcl/Tk by construction, so it is the
+              # oracle for the option validator: anything flagged there is our bug.
+              TCL_LSP_TK_LIBRARY = "${tk}/lib/tk${lib.versions.majorMinor tk.version}";
             };
 
-            nativeCheckInputs = [ pkgs.tclPackages.tcllib ];
+            nativeCheckInputs = [
+              pkgs.tclPackages.tcllib
+              tk
+            ];
 
             # Bake the Tcl runtime and the optional external tools as *defaults*, so
             # the server works with no PATH setup while a user's environment can still

@@ -298,6 +298,23 @@ if {![string match {*"-command"*} $tkcomp]} {
 }
 puts "ok  completion offers Tk widget options"
 
+# --- Tk option validation: an unknown option is flagged, inherited ones are not
+set tkbad "ttk::button .b -cursor watch -takefocus 1 -commnd hi\n"
+set tkbaddoc [string map [list \n \\n \" \\\"] $tkbad]
+send $srv "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file:///tkbad.tcl\",\"languageId\":\"tcl\",\"version\":1,\"text\":\"$tkbaddoc\"}}}"
+set tkdiag [recv $srv]
+if {![string match {*unknown-option*} $tkdiag]} {
+    puts "FAIL: misspelled Tk option not flagged: $tkdiag"; exit 1
+}
+if {![string match {*did you mean*-command*} $tkdiag]} {
+    puts "FAIL: no suggestion for -commnd: $tkdiag"; exit 1
+}
+# -cursor and -takefocus are inherited through .SO; flagging them would be wrong.
+if {[string match {*-cursor*} $tkdiag] || [string match {*-takefocus*} $tkdiag]} {
+    puts "FAIL: inherited standard options were flagged: $tkdiag"; exit 1
+}
+puts "ok  Tk option validation flags typos but not inherited options"
+
 # --- hover over a Tcl builtin comes from the generated command database
 set bsrc "lsort \[list 3 1 2\]\n"
 set bdoc2 [string map [list \n \\n \" \\\"] $bsrc]

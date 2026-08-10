@@ -422,6 +422,21 @@ impl Server {
             })
             .collect();
 
+        for bad in unknown_options(&outline, text, &self.kb) {
+            let mut message = format!("`{}` is not an option of `{}`", bad.flag, bad.command);
+            if let Some(near) = &bad.suggestion {
+                message.push_str(&format!("; did you mean `{near}`?"));
+            }
+            out.push(Diagnostic {
+                range: to_range(doc.line_index(), bad.range, self.encoding),
+                severity: Some(DiagnosticSeverity::WARNING),
+                code: Some(NumberOrString::String("unknown-option".into())),
+                source: Some("tcl-lsp".to_string()),
+                message,
+                ..Default::default()
+            });
+        }
+
         for range in unbraced_expressions(&outline, text) {
             out.push(Diagnostic {
                 range: to_range(doc.line_index(), range, self.encoding),
@@ -468,6 +483,33 @@ impl Server {
                 kind: Some(CodeActionKind::QUICKFIX),
                 edit: Some(WorkspaceEdit {
                     changes: Some(single_change(&uri, vec![edit])),
+                    ..Default::default()
+                }),
+                is_preferred: Some(true),
+                ..Default::default()
+            }));
+        }
+
+        // Correct a misspelled option.
+        for bad in unknown_options(&outline, text, &self.kb) {
+            if bad.range.end < from || bad.range.start > to {
+                continue;
+            }
+            let Some(near) = bad.suggestion else { continue };
+            let Some(range) = self.range_in(&uri, bad.range) else {
+                continue;
+            };
+            actions.push(CodeActionOrCommand::CodeAction(CodeAction {
+                title: format!("Change `{}` to `{near}`", bad.flag),
+                kind: Some(CodeActionKind::QUICKFIX),
+                edit: Some(WorkspaceEdit {
+                    changes: Some(single_change(
+                        &uri,
+                        vec![TextEdit {
+                            range,
+                            new_text: near,
+                        }],
+                    )),
                     ..Default::default()
                 }),
                 is_preferred: Some(true),
@@ -1725,6 +1767,86 @@ fn namespace_at(symbols: &[Symbol], offset: usize) -> String {
     best
 }
 
+/// An option flag the command does not accept.
+struct BadOption {
+    range: Range<usize>,
+    flag: String,
+    command: String,
+    suggestion: Option<String>,
+}
+
+/// Finds `-option` arguments a command is documented not to accept.
+///
+/// Only commands whose option list is actually known are checked — `Kb::accepts_option`
+/// returns `None` otherwise, and "cannot say" must never become "invalid". This is
+/// only sound because `.SO` inheritance is resolved when the database is generated;
+/// without that a `ttk::button` would appear to reject `-cursor`.
+fn unknown_options(outline: &tcl_syntax::Outline, text: &str, kb: &kb::Kb) -> Vec<BadOption> {
+    let mut out = Vec::new();
+    for call in &outline.calls {
+        let Some(cmd) = kb.get(&call.name) else {
+            continue;
+        };
+        if cmd.options.is_empty() {
+            continue;
+        }
+        for arg in &call.args {
+            let Some(word) = text.get(arg.clone()) else {
+                continue;
+            };
+            // `--` ends option processing, so nothing after it is a flag.
+            if word == "--" {
+                break;
+            }
+            // A leading dash followed by a letter: `-3` is a number, `$-x` is not
+            // a literal, and a value that merely starts with `-` is rare enough
+            // here that the trade is worth it.
+            if !word.starts_with('-') || !word[1..].starts_with(|c: char| c.is_ascii_alphabetic()) {
+                continue;
+            }
+            if kb.accepts_option(&call.name, word) != Some(false) {
+                continue;
+            }
+            out.push(BadOption {
+                range: arg.clone(),
+                flag: word.to_string(),
+                command: cmd.name.clone(),
+                suggestion: nearest_option(cmd, word),
+            });
+        }
+    }
+    out
+}
+
+/// The documented option closest to `flag`, when one is close enough to be a
+/// plausible typo rather than a wild guess.
+fn nearest_option(cmd: &kb::Command, flag: &str) -> Option<String> {
+    let (best, dist) = cmd
+        .options
+        .iter()
+        .map(|o| (o.flag.clone(), edit_distance(&o.flag, flag)))
+        .min_by_key(|(_, d)| *d)?;
+    // A third of the length, so `-comand` suggests `-command` but `-zzz` suggests
+    // nothing.
+    (dist * 3 <= flag.len().max(1)).then_some(best)
+}
+
+/// Levenshtein distance, iterative with a single row.
+fn edit_distance(a: &str, b: &str) -> usize {
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut cur = vec![0usize; b.len() + 1];
+    for (i, ca) in a.chars().enumerate() {
+        cur[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let cost = usize::from(ca != *cb);
+            cur[j + 1] = (prev[j] + cost).min(prev[j + 1] + 1).min(cur[j] + 1);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[b.len()]
+}
+
 /// Byte ranges of expression arguments that were written without braces.
 ///
 /// `expr $a + $b` is substituted before evaluation: slower, and a value carrying
@@ -1889,6 +2011,107 @@ mod tests {
         let src = "set x 1\nnamespace eval a {\n set y 2\n}\n";
         let o = outline(&Script::new(src));
         assert_eq!(namespace_at(&o.symbols, 0), "::");
+    }
+
+    fn bad_options(src: &str) -> Vec<BadOption> {
+        let o = outline(&Script::new(src));
+        unknown_options(&o, src, &kb::builtin(kb::Target::Tcl86))
+    }
+
+    #[test]
+    fn flags_an_option_a_widget_does_not_accept() {
+        let bad = bad_options("ttk::button .b -nosuchoption x\n");
+        assert_eq!(
+            bad.len(),
+            1,
+            "got {:?}",
+            bad.iter().map(|b| &b.flag).collect::<Vec<_>>()
+        );
+        assert_eq!(bad[0].flag, "-nosuchoption");
+    }
+
+    /// The whole reason option validation was unsafe before `.SO` inheritance was
+    /// resolved: `-cursor` is documented on `ttk_widget`, not on `ttk_button`.
+    #[test]
+    fn accepts_options_inherited_through_the_so_block() {
+        assert!(
+            bad_options("ttk::button .b -cursor watch -takefocus 1 -style X\n").is_empty(),
+            "inherited standard options must be accepted"
+        );
+        assert!(
+            bad_options("button .b -font fixed -padx 2 -cursor watch\n").is_empty(),
+            "classic widgets inherit from options(n)"
+        );
+    }
+
+    #[test]
+    fn says_nothing_about_commands_whose_options_are_undocumented() {
+        // `lsort` takes `-unique` and friends, but they come from prose, not `.OP`.
+        assert!(bad_options("lsort -unique -integer {1 2}\n").is_empty());
+    }
+
+    #[test]
+    fn ignores_negative_numbers_and_the_double_dash() {
+        assert!(bad_options("ttk::button .b -width -3\n").is_empty());
+        assert!(bad_options("ttk::button .b -- -whatever\n").is_empty());
+    }
+
+    #[test]
+    fn suggests_a_near_miss_but_not_a_wild_guess() {
+        let bad = bad_options("ttk::button .b -commnd x\n");
+        assert_eq!(bad[0].suggestion.as_deref(), Some("-command"));
+        let far = bad_options("ttk::button .b -qqqqqqqq x\n");
+        assert_eq!(far[0].suggestion, None, "no plausible correction");
+    }
+
+    /// The guard that makes option validation defensible: Tk's own library is
+    /// correct Tcl/Tk by construction, so anything flagged there is our bug. A
+    /// diagnostic users learn to distrust is worse than no diagnostic at all.
+    #[test]
+    fn reports_nothing_on_tk_own_library() {
+        let Ok(root) = std::env::var("TCL_LSP_TK_LIBRARY") else {
+            eprintln!("TCL_LSP_TK_LIBRARY unset; skipping the false-positive guard");
+            return;
+        };
+        let Ok(entries) = std::fs::read_dir(&root) else {
+            return;
+        };
+        let kb = kb::builtin(kb::Target::Tcl86);
+        let mut findings = Vec::new();
+        let mut files = 0;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().is_some_and(|e| e == "tcl") {
+                let Ok(text) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                files += 1;
+                let o = outline(&Script::new(&text));
+                for bad in unknown_options(&o, &text, &kb) {
+                    findings.push(format!(
+                        "{}: {} on {}",
+                        path.display(),
+                        bad.flag,
+                        bad.command
+                    ));
+                }
+            }
+        }
+        assert!(files > 5, "expected Tk's library at {root}");
+        assert!(
+            findings.is_empty(),
+            "{} false positives over {files} files:\n{}",
+            findings.len(),
+            findings.join("\n")
+        );
+    }
+
+    #[test]
+    fn edit_distance_is_symmetric_and_zero_for_equal() {
+        assert_eq!(edit_distance("abc", "abc"), 0);
+        assert_eq!(edit_distance("-command", "-commnd"), 1);
+        assert_eq!(edit_distance("kitten", "sitting"), 3);
+        assert_eq!(edit_distance("", "abc"), 3);
     }
 
     #[test]

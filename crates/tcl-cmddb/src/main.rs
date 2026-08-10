@@ -49,12 +49,16 @@ fn main() -> Result<()> {
     }
 
     let mut commands = Vec::new();
-    collect(&tcl_man, "tcl", &mut commands)?;
+    let mut inherited: Vec<Inherited> = Vec::new();
+    collect(&tcl_man, "tcl", &mut commands, &mut inherited)?;
     if let Some(tk) = &tk_man {
-        collect(tk, "tk", &mut commands)?;
+        collect(tk, "tk", &mut commands, &mut inherited)?;
     }
     commands.sort_by(|a, b| a.name.cmp(&b.name));
     commands.dedup_by(|a, b| a.name == b.name);
+
+    resolve_standard_options(&mut commands, &inherited);
+    apply_option_aliases(&mut commands);
 
     let kb = Kb::new(version, commands);
 
@@ -66,18 +70,129 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn collect(dir: &Path, package: &str, out: &mut Vec<Command>) -> Result<()> {
+/// A widget's `.SO` block: the options it inherits, and the page they come from.
+struct Inherited {
+    command: String,
+    /// Page the options are documented on: `options` unless `.SO` names another.
+    from_page: String,
+    flags: Vec<String>,
+}
+
+fn collect(
+    dir: &Path,
+    package: &str,
+    out: &mut Vec<Command>,
+    inherited: &mut Vec<Inherited>,
+) -> Result<()> {
     let entries = std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))?;
     for entry in entries.flatten() {
         let path = entry.path();
         let Some(text) = read_maybe_gzip(&path) else {
             continue;
         };
-        if let Some(cmd) = parse_page(&text, package) {
+        if let Some((cmd, inh)) = parse_page(&text, package) {
+            if let Some(mut inh) = inh {
+                inh.command = cmd.name.clone();
+                inherited.push(inh);
+            }
             out.push(cmd);
         }
     }
     Ok(())
+}
+
+/// Copies each `.SO`-inherited option's documentation in from the page that
+/// defines it, so a widget's option list is complete rather than only listing
+/// what its own page happens to spell out.
+///
+/// Without this a `ttk::button` appears not to accept `-cursor`, which it plainly
+/// does — the reason validating options was not safe before.
+fn resolve_standard_options(commands: &mut [Command], inherited: &[Inherited]) {
+    // Page name -> its documented options. `.SO` names a page (`ttk_widget`),
+    // whose command is spelled with `::` (`ttk::widget`).
+    let by_page: std::collections::HashMap<String, Vec<OptionSpec>> = commands
+        .iter()
+        .map(|c| (c.name.replace("::", "_"), c.options.clone()))
+        .collect();
+
+    let mut additions: Vec<(String, Vec<OptionSpec>)> = Vec::new();
+    for inh in inherited {
+        let source = by_page.get(&inh.from_page);
+        let mut add = Vec::new();
+        for flag in &inh.flags {
+            let mut spec = source
+                .and_then(|opts| opts.iter().find(|o| &o.flag == flag))
+                .cloned()
+                .unwrap_or_else(|| OptionSpec {
+                    flag: flag.clone(),
+                    ..Default::default()
+                });
+            spec.standard = true;
+            add.push(spec);
+        }
+        additions.push((inh.command.clone(), add));
+    }
+
+    for (name, add) in additions {
+        let Some(cmd) = commands.iter_mut().find(|c| c.name == name) else {
+            continue;
+        };
+        for spec in add {
+            if !cmd.options.iter().any(|o| o.flag == spec.flag) {
+                cmd.options.push(spec);
+            }
+        }
+        cmd.options.sort_by(|a, b| a.flag.cmp(&b.flag));
+    }
+}
+
+/// Propagates documented option aliases across every command that takes them.
+///
+/// Tk records aliases inline on one page — `.OP "\-background or \-bg"` — but a
+/// widget that documents `-background` on its own page never mentions `-bg`, even
+/// though it accepts it. Two flags naming the same option-database entry are the
+/// same option, so wherever one is valid the other is too.
+fn apply_option_aliases(commands: &mut [Command]) {
+    use std::collections::{BTreeSet, HashMap};
+
+    let mut groups: HashMap<(String, String), BTreeSet<String>> = HashMap::new();
+    for c in commands.iter() {
+        for o in &c.options {
+            if o.db_name.is_empty() {
+                continue;
+            }
+            groups
+                .entry((o.db_name.clone(), o.db_class.clone()))
+                .or_default()
+                .insert(o.flag.clone());
+        }
+    }
+    // Only groups that actually name an option more than one way are aliases.
+    groups.retain(|_, flags| flags.len() > 1);
+
+    for c in commands.iter_mut() {
+        let mut add: Vec<OptionSpec> = Vec::new();
+        for o in &c.options {
+            let Some(group) = groups.get(&(o.db_name.clone(), o.db_class.clone())) else {
+                continue;
+            };
+            for flag in group {
+                let known = c.options.iter().any(|x| &x.flag == flag)
+                    || add.iter().any(|x| &x.flag == flag);
+                if !known {
+                    add.push(OptionSpec {
+                        flag: flag.clone(),
+                        db_name: o.db_name.clone(),
+                        db_class: o.db_class.clone(),
+                        doc: o.doc.clone(),
+                        standard: o.standard,
+                    });
+                }
+            }
+        }
+        c.options.extend(add);
+        c.options.sort_by(|a, b| a.flag.cmp(&b.flag));
+    }
 }
 
 /// Reads a man page, transparently handling the `.gz` that Nix installs.
@@ -150,7 +265,7 @@ fn clean(s: &str) -> String {
 }
 
 /// Extracts one command from a man page, or `None` if the page documents none.
-fn parse_page(text: &str, package: &str) -> Option<Command> {
+fn parse_page(text: &str, package: &str) -> Option<(Command, Option<Inherited>)> {
     let mut cmd = Command {
         package: package.to_string(),
         ..Default::default()
@@ -166,9 +281,13 @@ fn parse_page(text: &str, package: &str) -> Option<Command> {
     }
     let mut section = Section::None;
     let mut description = String::new();
-    let mut pending_op: Option<OptionSpec> = None;
+    let mut pending_op: Option<PendingOp> = None;
     let mut pending_tp: Option<Subcommand> = None;
     let mut want_tp_signature = false;
+    // `.SO ?page?` opens a block naming the options this widget inherits.
+    let mut in_so = false;
+    let mut so_page = String::new();
+    let mut so_flags: Vec<String> = Vec::new();
 
     for raw in text.lines() {
         let line = raw.trim_end();
@@ -200,15 +319,53 @@ fn parse_page(text: &str, package: &str) -> Option<Command> {
             continue;
         }
 
+        // `.SO ?page?` … `.SE` lists the standard options a widget inherits. The
+        // names appear inline; their documentation lives on the named page, or on
+        // `options(n)` when no page is given.
+        if let Some(rest) = line.strip_prefix(".SO") {
+            flush_op(&mut pending_op, &mut cmd);
+            in_so = true;
+            let named = rest.trim();
+            so_page = if named.is_empty() {
+                "options".to_string()
+            } else {
+                named.to_string()
+            };
+            continue;
+        }
+        if line.starts_with(".SE") {
+            in_so = false;
+            continue;
+        }
+        if in_so {
+            for word in clean(line).split_whitespace() {
+                if word.starts_with('-') {
+                    so_flags.push(word.to_string());
+                }
+            }
+            continue;
+        }
+
         // `.OP \-command command Command` introduces a Tk widget option.
         if let Some(rest) = line.strip_prefix(".OP ") {
             flush_op(&mut pending_op, &mut cmd);
             flush_tp(&mut pending_tp, &mut cmd);
-            let parts: Vec<String> = rest.split_whitespace().map(clean).collect();
-            pending_op = Some(OptionSpec {
-                flag: parts.first().cloned().unwrap_or_default(),
-                db_name: parts.get(1).cloned().unwrap_or_default(),
-                db_class: parts.get(2).cloned().unwrap_or_default(),
+            let parts = split_fields(rest);
+            // The first field may name an alias too, quoted:
+            //   .OP "\-borderwidth or \-bd" borderWidth BorderWidth
+            let flags: Vec<String> = parts
+                .first()
+                .map(|f| {
+                    f.split(" or ")
+                        .map(|s| clean(s.trim()))
+                        .filter(|s| s.starts_with('-'))
+                        .collect()
+                })
+                .unwrap_or_default();
+            pending_op = (!flags.is_empty()).then(|| PendingOp {
+                flags,
+                db_name: parts.get(1).map(|s| clean(s)).unwrap_or_default(),
+                db_class: parts.get(2).map(|s| clean(s)).unwrap_or_default(),
                 doc: String::new(),
             });
             continue;
@@ -314,7 +471,12 @@ fn parse_page(text: &str, package: &str) -> Option<Command> {
     if cmd.summary.is_empty() && cmd.synopsis.is_empty() {
         return None;
     }
-    Some(cmd)
+    let inherited = (!so_flags.is_empty()).then(|| Inherited {
+        command: String::new(), // filled in by the caller, which knows the name
+        from_page: so_page,
+        flags: so_flags,
+    });
+    Some((cmd, inherited))
 }
 
 fn append_prose(buf: &mut String, line: &str) {
@@ -327,12 +489,51 @@ fn append_prose(buf: &mut String, line: &str) {
     buf.push_str(line);
 }
 
-fn flush_op(pending: &mut Option<OptionSpec>, cmd: &mut Command) {
-    if let Some(mut op) = pending.take() {
-        op.doc = truncate(&op.doc, 300);
-        if !op.flag.is_empty() {
-            cmd.options.push(op);
+/// An `.OP` entry being accumulated. One entry can name several flags, because
+/// Tk documents its aliases inline: `-borderwidth or -bd`.
+struct PendingOp {
+    flags: Vec<String>,
+    db_name: String,
+    db_class: String,
+    doc: String,
+}
+
+/// Splits a macro's arguments on whitespace, keeping `"quoted groups"` together.
+fn split_fields(line: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut quoted = false;
+    for c in line.chars() {
+        match c {
+            '"' => quoted = !quoted,
+            c if c.is_whitespace() && !quoted => {
+                if !cur.is_empty() {
+                    out.push(std::mem::take(&mut cur));
+                }
+            }
+            c => cur.push(c),
         }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+fn flush_op(pending: &mut Option<PendingOp>, cmd: &mut Command) {
+    let Some(op) = pending.take() else { return };
+    let doc = truncate(&op.doc, 300);
+    for flag in op.flags {
+        if flag.is_empty() || cmd.options.iter().any(|o| o.flag == flag) {
+            continue;
+        }
+        cmd.options.push(OptionSpec {
+            flag,
+            db_name: op.db_name.clone(),
+            db_class: op.db_class.clone(),
+            doc: doc.clone(),
+            standard: false,
+        });
     }
 }
 
@@ -385,7 +586,7 @@ list in sorted order.
 
     #[test]
     fn parses_a_simple_command_page() {
-        let c = parse_page(LSORT, "tcl").expect("a command");
+        let c = parse_page(LSORT, "tcl").expect("a command").0;
         assert_eq!(c.name, "lsort");
         assert_eq!(c.summary, "Sort the elements of a list");
         assert_eq!(c.synopsis, vec!["lsort ?options? list"]);
@@ -414,7 +615,7 @@ Perform a character-by-character comparison.
 
     #[test]
     fn extracts_ensemble_subcommands() {
-        let c = parse_page(STRING, "tcl").expect("a command");
+        let c = parse_page(STRING, "tcl").expect("a command").0;
         assert_eq!(c.name, "string");
         let names: Vec<&str> = c.subcommands.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, vec!["cat", "compare"]);
@@ -440,13 +641,101 @@ May be set to one of \fBnormal\fR, \fBactive\fR, or \fBdisabled\fR.
 
     #[test]
     fn extracts_tk_widget_options() {
-        let c = parse_page(TTK_BUTTON, "tk").expect("a command");
+        let c = parse_page(TTK_BUTTON, "tk").expect("a command").0;
         assert_eq!(c.name, "ttk::button");
         let flags: Vec<&str> = c.options.iter().map(|o| o.flag.as_str()).collect();
         assert_eq!(flags, vec!["-command", "-default"]);
         assert_eq!(c.options[0].db_name, "command");
         assert_eq!(c.options[0].db_class, "Command");
         assert!(c.options[0].doc.starts_with("A script to evaluate"));
+    }
+
+    const FRAME: &str = r#".TH frame n 8.4 Tk "Tk Built-In Commands"
+.SH NAME
+frame \- Create and manipulate frame widgets
+.SH SYNOPSIS
+\fBframe\fR \fIpathName \fR?\fIoptions\fR?
+.SO
+\-borderwidth	\-cursor	\-takefocus
+.SE
+.SH "WIDGET-SPECIFIC OPTIONS"
+.OP \-background background Background
+Background colour of the frame.
+"#;
+
+    const OPTIONS: &str = r#".TH options n 4.4 Tk "Tk Built-In Commands"
+.SH NAME
+options \- Standard options supported by widgets
+.SH SYNOPSIS
+standard options
+.SH DESCRIPTION
+.OP "\-background or \-bg" background Background
+Specifies the normal background colour.
+.OP "\-borderwidth or \-bd" borderWidth BorderWidth
+Specifies a non-negative value for the border width.
+.OP \-cursor cursor Cursor
+Specifies the mouse cursor.
+"#;
+
+    /// The `.OP` first field may be quoted and name an alias.
+    #[test]
+    fn parses_quoted_option_aliases() {
+        let c = parse_page(OPTIONS, "tk").expect("a command").0;
+        let flags: Vec<&str> = c.options.iter().map(|o| o.flag.as_str()).collect();
+        assert!(flags.contains(&"-background"), "got {flags:?}");
+        assert!(
+            flags.contains(&"-bg"),
+            "the alias must be recorded too: {flags:?}"
+        );
+        assert!(flags.contains(&"-borderwidth") && flags.contains(&"-bd"));
+        // Both names describe the same option-database entry.
+        let bg = c.options.iter().find(|o| o.flag == "-bg").unwrap();
+        assert_eq!(bg.db_name, "background");
+    }
+
+    #[test]
+    fn records_the_standard_options_a_widget_inherits() {
+        let (_, inh) = parse_page(FRAME, "tk").expect("a command");
+        let inh = inh.expect("frame has a .SO block");
+        assert_eq!(inh.from_page, "options");
+        assert_eq!(inh.flags, vec!["-borderwidth", "-cursor", "-takefocus"]);
+    }
+
+    #[test]
+    fn so_with_a_named_page_records_that_page() {
+        let page = ".TH ttk::button n 8.5 Tk\n.SH NAME\nttk::button \\- x\n.SH SYNOPSIS\nx\n.SO ttk_widget\n\\-cursor\t\\-style\n.SE\n";
+        let (_, inh) = parse_page(page, "tk").expect("a command");
+        assert_eq!(inh.expect("a .SO block").from_page, "ttk_widget");
+    }
+
+    /// End to end: a widget must end up accepting the options it inherits *and*
+    /// their aliases, which is what makes validating them safe.
+    #[test]
+    fn inheritance_and_aliases_combine() {
+        let (frame, finh) = parse_page(FRAME, "tk").expect("a command");
+        let (options, _) = parse_page(OPTIONS, "tk").expect("a command");
+        let mut commands = vec![frame, options];
+        let mut inh = finh.expect("a .SO block");
+        inh.command = "frame".to_string();
+
+        resolve_standard_options(&mut commands, &[inh]);
+        apply_option_aliases(&mut commands);
+
+        let frame = commands.iter().find(|c| c.name == "frame").unwrap();
+        let flags: Vec<&str> = frame.options.iter().map(|o| o.flag.as_str()).collect();
+        for want in [
+            "-background",
+            "-bg",
+            "-borderwidth",
+            "-bd",
+            "-cursor",
+            "-takefocus",
+        ] {
+            assert!(
+                flags.contains(&want),
+                "frame should accept {want}: {flags:?}"
+            );
+        }
     }
 
     #[test]

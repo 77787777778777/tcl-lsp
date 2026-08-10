@@ -52,6 +52,10 @@ pub struct OptionSpec {
     pub db_class: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub doc: String,
+    /// True when the widget inherits this through the man page's `.SO` block
+    /// rather than documenting it itself. Both are equally valid to pass.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub standard: bool,
 }
 
 /// The whole database for one Tcl/Tk version.
@@ -144,6 +148,29 @@ impl Kb {
 
     pub fn iter(&self) -> impl Iterator<Item = &Command> {
         self.commands.iter()
+    }
+
+    /// Whether `flag` is a valid option for `command`.
+    ///
+    /// Returns `None` when nothing is known about the command's options, which the
+    /// caller must treat as "cannot say" rather than "invalid" — most Tcl commands
+    /// take options that no `.OP` entry describes.
+    /// Tk accepts any *unique prefix* of an option name, so `-borderw` is as valid
+    /// as `-borderwidth`; only an ambiguous or unmatched prefix is an error.
+    pub fn accepts_option(&self, command: &str, flag: &str) -> Option<bool> {
+        let cmd = self.get(command)?;
+        if cmd.options.is_empty() {
+            return None;
+        }
+        if cmd.options.iter().any(|o| o.flag == flag) {
+            return Some(true);
+        }
+        let prefixed = cmd
+            .options
+            .iter()
+            .filter(|o| o.flag.starts_with(flag))
+            .count();
+        Some(prefixed == 1)
     }
 
     /// Looks up `string cat` style ensemble subcommands.
