@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/pillowtrucker/tcl-lsp"
+authors = ["tcl-lsp contributors"]
+
+[workspace.dependencies]
+tcl-tclsys = { path = "crates/tcl-tclsys", version = "0.1.0" }
+tcl-syntax = { path = "crates/tcl-syntax", version = "0.1.0" }
+tcl-analysis = { path = "crates/tcl-analysis", version = "0.1.0" }
+
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

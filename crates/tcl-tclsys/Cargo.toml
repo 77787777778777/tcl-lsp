@@ -1,0 +1,16 @@
+[package]
+name = "tcl-tclsys"
+description = "Safe Rust bindings to Tcl's own parser (Tcl_ParseCommand and friends)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+
+[build-dependencies]
+bindgen = "0.72"
+pkg-config = "0.3"

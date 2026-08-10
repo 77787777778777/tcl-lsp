@@ -1,0 +1,3 @@
+# Keep the FFI boundary honest: every `unsafe` block must carry a SAFETY comment.
+# Enforced via `#![warn(clippy::undocumented_unsafe_blocks)]` in crates/tcl-tclsys.
+too-many-arguments-threshold = 8
