@@ -231,7 +231,17 @@ fn doc_of(script: &Script, cmd: &Command) -> Option<String> {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
     Script,
-    ClassBody,
+    ClassBody(Dialect),
+}
+
+/// Which object system a class body is written in. They share member keywords
+/// but not their argument shapes: TclOO `variable a b c` names three variables,
+/// while itcl `variable name ?init?` names one and gives it a value.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Dialect {
+    TclOo,
+    Itcl,
+    Snit,
 }
 
 /// Builds the outline for a whole file.
@@ -370,12 +380,44 @@ impl Walker<'_> {
                 });
             }
 
-            let head = head.trim_start_matches("::");
+            // itcl writes access control in front of the member it applies to
+            // (`public method m {} {}`), so step past it and treat what follows as
+            // the real command.
+            let bare = head.trim_start_matches("::").to_string();
+            let (head, words) = if matches!(mode, Mode::ClassBody(_))
+                && matches!(bare.as_str(), "public" | "protected" | "private")
+                && words.len() > 2
+            {
+                match words.get(1).and_then(|w| literal(self.script, w)) {
+                    Some(inner) => (
+                        inner.trim_start_matches("::").to_string(),
+                        words[1..].to_vec(),
+                    ),
+                    None => (bare, words),
+                }
+            } else {
+                (bare, words)
+            };
+            let head = head.as_str();
+
             match (mode, head) {
                 (Mode::Script, "proc") => self.proc_def(&cmd, &words, ns, into),
                 (Mode::Script, "namespace") => self.namespace_def(&cmd, &words, ns, into),
+                // `oo::class create Name {body}` — name and body are words 2 and 3.
                 (Mode::Script, "oo::class") => self.class_def(&cmd, &words, ns, into),
-                (Mode::ClassBody, "method") => {
+                // itcl and snit take the name directly: `itcl::class Name {body}`.
+                (
+                    Mode::Script,
+                    "itcl::class" | "snit::type" | "snit::widget" | "snit::widgetadaptor",
+                ) => {
+                    let dialect = if head.starts_with("itcl") {
+                        Dialect::Itcl
+                    } else {
+                        Dialect::Snit
+                    };
+                    self.megawidget_def(&cmd, &words, ns, dialect, into)
+                }
+                (Mode::ClassBody(_), "method") => {
                     if let Some(mut sym) = self.simple_def(&cmd, &words, ns, SymbolKind::Method) {
                         sym.detail = words.get(2).and_then(|w| literal(self.script, w));
                         if let Some(body) = words.get(3).and_then(|w| body_range(w)) {
@@ -387,7 +429,7 @@ impl Walker<'_> {
                         into.push(sym);
                     }
                 }
-                (Mode::ClassBody, "constructor") => {
+                (Mode::ClassBody(_), "constructor") => {
                     let mut sym = self.anon_def(&cmd, ns, "constructor", SymbolKind::Constructor);
                     if let Some(body) = words.get(2).and_then(|w| body_range(w)) {
                         self.bind_params(&words, 1, body.clone());
@@ -395,7 +437,7 @@ impl Walker<'_> {
                     }
                     into.push(sym);
                 }
-                (Mode::ClassBody, "destructor") => {
+                (Mode::ClassBody(_), "destructor") => {
                     let mut sym = self.anon_def(&cmd, ns, "destructor", SymbolKind::Destructor);
                     if let Some(body) = words.get(1).and_then(|w| body_range(w)) {
                         self.walk(body.clone(), ns, Mode::Script, body, &mut sym.children);
@@ -404,7 +446,41 @@ impl Walker<'_> {
                 }
                 // `superclass A B` / `mixin M` inside a class body. Recorded on the
                 // enclosing class, which the caller patches in after the walk.
-                (Mode::ClassBody, "superclass" | "mixin") => {
+                // `typemethod` (snit) and a class-level `proc` (itcl) are members
+                // just like `method`, differing only in what they are bound to.
+                (Mode::ClassBody(_), "typemethod" | "proc") => {
+                    if let Some(mut sym) = self.simple_def(&cmd, &words, ns, SymbolKind::Method) {
+                        sym.detail = words.get(2).and_then(|w| literal(self.script, w));
+                        if let Some(body) = words.get(3).and_then(|w| body_range(w)) {
+                            self.bind_params(&words, 2, body.clone());
+                            let mut kids = Vec::new();
+                            self.walk(body.clone(), ns, Mode::Script, body, &mut kids);
+                            sym.children = kids;
+                        }
+                        into.push(sym);
+                    }
+                }
+                // snit's `option -name ?default?`, plus the several flavours of
+                // class-level storage in itcl and snit.
+                (Mode::ClassBody(_), "typevariable" | "common" | "component" | "option") => {
+                    if let (Some(name), Some(r)) = (
+                        words.get(1).and_then(|w| literal(self.script, w)),
+                        words.get(1).and_then(|w| word_range(w)),
+                    ) {
+                        into.push(Symbol {
+                            kind: SymbolKind::Variable,
+                            qname: qualify(ns, &name),
+                            name,
+                            name_range: r,
+                            full_range: cmd.range.clone(),
+                            detail: None,
+                            supers: Vec::new(),
+                            doc: None,
+                            children: Vec::new(),
+                        });
+                    }
+                }
+                (Mode::ClassBody(_), "superclass" | "mixin" | "inherit") => {
                     for w in words.iter().skip(1) {
                         if let Some(name) = literal(self.script, w) {
                             if !name.starts_with('-') {
@@ -413,7 +489,27 @@ impl Walker<'_> {
                         }
                     }
                 }
-                (Mode::ClassBody, "variable") => {
+                // TclOO's `variable a b c` declares three; itcl's and snit's
+                // `variable name ?value?` declares one and initialises it.
+                (Mode::ClassBody(Dialect::Itcl | Dialect::Snit), "variable") => {
+                    if let (Some(name), Some(r)) = (
+                        words.get(1).and_then(|w| literal(self.script, w)),
+                        words.get(1).and_then(|w| word_range(w)),
+                    ) {
+                        into.push(Symbol {
+                            kind: SymbolKind::Variable,
+                            qname: qualify(ns, &name),
+                            name,
+                            name_range: r,
+                            full_range: cmd.range.clone(),
+                            detail: None,
+                            supers: Vec::new(),
+                            doc: None,
+                            children: Vec::new(),
+                        });
+                    }
+                }
+                (Mode::ClassBody(_), "variable") => {
                     for w in words.iter().skip(1) {
                         if let (Some(name), Some(r)) = (literal(self.script, w), word_range(w)) {
                             into.push(Symbol {
@@ -635,7 +731,35 @@ impl Walker<'_> {
         {
             return;
         }
-        let Some(name) = words.get(2).and_then(|w| literal(self.script, w)) else {
+        self.class_like(cmd, words, ns, 2, 3, Dialect::TclOo, into);
+    }
+
+    /// `itcl::class Name {body}` / `snit::type Name {body}` — the name is word 1
+    /// and the body word 2, where TclOO puts them at 2 and 3 after `create`.
+    fn megawidget_def(
+        &mut self,
+        cmd: &Command,
+        words: &[&[Token]],
+        ns: &str,
+        dialect: Dialect,
+        into: &mut Vec<Symbol>,
+    ) {
+        self.class_like(cmd, words, ns, 1, 2, dialect, into);
+    }
+
+    /// Shared body for every class-like definition, differing only in which words
+    /// hold the name and the body.
+    fn class_like(
+        &mut self,
+        cmd: &Command,
+        words: &[&[Token]],
+        ns: &str,
+        name_at: usize,
+        body_at: usize,
+        dialect: Dialect,
+        into: &mut Vec<Symbol>,
+    ) {
+        let Some(name) = words.get(name_at).and_then(|w| literal(self.script, w)) else {
             return;
         };
         let qname = qualify(ns, &name);
@@ -644,7 +768,7 @@ impl Walker<'_> {
             name: last_segment(&name).to_string(),
             qname: qname.clone(),
             name_range: words
-                .get(2)
+                .get(name_at)
                 .and_then(|w| word_range(w))
                 .unwrap_or(cmd.range.clone()),
             full_range: cmd.range.clone(),
@@ -653,10 +777,16 @@ impl Walker<'_> {
             doc: doc_of(self.script, cmd),
             children: Vec::new(),
         };
-        if let Some(body) = words.get(3).and_then(|w| body_range(w)) {
+        if let Some(body) = words.get(body_at).and_then(|w| body_range(w)) {
             let mut kids = Vec::new();
             let outer_supers = std::mem::take(&mut self.pending_supers);
-            self.walk(body.clone(), &qname, Mode::ClassBody, body, &mut kids);
+            self.walk(
+                body.clone(),
+                &qname,
+                Mode::ClassBody(dialect),
+                body,
+                &mut kids,
+            );
             sym.children = kids;
             // Collected by the ClassBody arm while walking, then handed back so a
             // nested class does not steal its parent superclass list.
@@ -889,6 +1019,83 @@ mod tests {
                 "::Shape::destructor"
             ]
         );
+    }
+
+    // --- itcl and snit -----------------------------------------------------
+
+    #[test]
+    fn finds_itcl_class_members() {
+        let o = parse(
+            "itcl::class Shape {\n  inherit Base\n  constructor {args} {}\n  destructor {}\n  \
+             public method area {} {}\n  protected method helper {x} {}\n  \
+             private variable sides 3\n  common registry\n  proc make {} {}\n}\n",
+        );
+        assert_eq!(
+            qnames(&o),
+            vec![
+                "::Shape",
+                "::Shape::constructor",
+                "::Shape::destructor",
+                "::Shape::area",
+                "::Shape::helper",
+                "::Shape::sides",
+                "::Shape::registry",
+                "::Shape::make",
+            ]
+        );
+    }
+
+    /// itcl spells inheritance `inherit`, not `superclass`.
+    #[test]
+    fn itcl_inherit_is_a_supertype() {
+        let o = parse("itcl::class Derived {\n  inherit Base Other\n}\n");
+        assert_eq!(o.symbols[0].supers, vec!["Base", "Other"]);
+    }
+
+    #[test]
+    fn access_modifiers_do_not_hide_the_member() {
+        let o = parse("itcl::class C {\n  public method m {a b} {}\n}\n");
+        let m = &o.symbols[0].children[0];
+        assert_eq!(m.name, "m");
+        assert_eq!(m.kind, SymbolKind::Method);
+        assert_eq!(m.detail.as_deref(), Some("a b"));
+    }
+
+    #[test]
+    fn finds_snit_type_members() {
+        let o = parse(
+            "snit::type Server {\n  option -port 80\n  variable sock\n  typevariable count\n  \
+             component logger\n  constructor {args} {}\n  method start {} {}\n  \
+             typemethod reset {} {}\n}\n",
+        );
+        assert_eq!(
+            qnames(&o),
+            vec![
+                "::Server",
+                "::Server::-port",
+                "::Server::sock",
+                "::Server::count",
+                "::Server::logger",
+                "::Server::constructor",
+                "::Server::start",
+                "::Server::reset",
+            ]
+        );
+    }
+
+    #[test]
+    fn snit_widget_and_widgetadaptor_are_classes() {
+        for form in ["snit::widget", "snit::widgetadaptor"] {
+            let o = parse(&format!("{form} W {{\n  method draw {{}} {{}}\n}}\n"));
+            assert_eq!(o.symbols[0].kind, SymbolKind::Class, "{form}");
+            assert_eq!(qnames(&o), vec!["::W", "::W::draw"], "{form}");
+        }
+    }
+
+    #[test]
+    fn megawidget_bodies_are_still_walked_for_nested_procs() {
+        let o = parse("snit::type T {\n  method m {} {\n    set local 1\n  }\n}\n");
+        assert!(o.variables.iter().any(|v| v.name == "local"));
     }
 
     #[test]

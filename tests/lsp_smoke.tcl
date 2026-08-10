@@ -222,6 +222,45 @@ if {![string match {*"s:"*} $hints]} {
 }
 puts "ok  inlayHint labels arguments with parameter names"
 
+# --- snit and itcl megawidgets appear as classes with members
+set megasrc "itcl::class Shape {\n    inherit Base\n    public method area {} {}\n    private variable sides 3\n}\nsnit::type Server {\n    option -port 80\n    method start {} {}\n}\n"
+set megadoc [string map [list \n \\n \" \\\"] $megasrc]
+send $srv "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file:///mega.tcl\",\"languageId\":\"tcl\",\"version\":1,\"text\":\"$megadoc\"}}}"
+recv $srv
+send $srv {{"jsonrpc":"2.0","id":32,"method":"textDocument/documentSymbol","params":{"textDocument":{"uri":"file:///mega.tcl"}}}}
+set megasym [recv $srv]
+foreach want {Shape area sides Server start} {
+    if {![string match "*\"$want\"*" $megasym]} {
+        puts "FAIL: documentSymbol missing $want from itcl/snit: $megasym"; exit 1
+    }
+}
+# `private variable sides 3` declares one variable, not two.
+if {[string match {*"3"*} $megasym]} {
+    puts "FAIL: an itcl variable initialiser was treated as a name: $megasym"; exit 1
+}
+puts "ok  itcl and snit classes expose their members"
+
+# --- on-type formatting re-indents a closing brace
+set otsrc "proc f {} {\n    set x 1\n            }\n"
+set otdoc [string map [list \n \\n \" \\\"] $otsrc]
+send $srv "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file:///ot.tcl\",\"languageId\":\"tcl\",\"version\":1,\"text\":\"$otdoc\"}}}"
+recv $srv
+# Quoted with "" because the payload carries a lone `}` as the trigger character.
+send $srv "{\"jsonrpc\":\"2.0\",\"id\":33,\"method\":\"textDocument/onTypeFormatting\",\"params\":{\"textDocument\":{\"uri\":\"file:///ot.tcl\"},\"position\":{\"line\":2,\"character\":13},\"ch\":\"}\",\"options\":{\"tabSize\":4,\"insertSpaces\":true}}}"
+set ot [recv $srv]
+if {![string match {*"newText":""*} $ot]} {
+    puts "FAIL: closing brace not re-indented to column 0: $ot"; exit 1
+}
+puts "ok  onTypeFormatting aligns a closing brace with its opener"
+
+# A trigger character we do not handle must be a no-op, not an edit.
+send $srv {{"jsonrpc":"2.0","id":34,"method":"textDocument/onTypeFormatting","params":{"textDocument":{"uri":"file:///ot.tcl"},"position":{"line":1,"character":11},"ch":";","options":{"tabSize":4,"insertSpaces":true}}}}
+set ot2 [recv $srv]
+if {![string match {*"result":\[\]*} $ot2]} {
+    puts "FAIL: an unhandled trigger should produce no edits: $ot2"; exit 1
+}
+puts "ok  onTypeFormatting leaves other trigger characters alone"
+
 # --- type hierarchy over TclOO superclasses
 set oosrc "oo::class create Base {}\noo::class create Derived {\n    superclass Base\n}\n"
 set oodoc [string map [list \n \\n \" \\\"] $oosrc]

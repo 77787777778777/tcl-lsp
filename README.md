@@ -13,7 +13,7 @@ unterminated construct at the end of the document is reported as a warning rathe
 error, and never as the red squiggle under your cursor that a naive implementation
 produces on every keystroke.
 
-Status: **usable.** Phases 1 and 2 are complete; see [Roadmap](#roadmap).
+Status: **feature-complete against the planned roadmap.** See [Roadmap](#roadmap).
 
 ## Supported Tcl versions
 
@@ -35,7 +35,7 @@ per-version with bindgen rather than hand-written.
 | Go to definition | across the whole workspace, namespace-qualified |
 | Find references | command call sites across files |
 | Document highlight | uses and definitions in the current file |
-| Document + workspace symbols | procs, namespaces, TclOO classes, methods, variables |
+| Document + workspace symbols | procs, namespaces, and TclOO, itcl and snit classes with their members |
 | Folding ranges | proc, namespace and class bodies |
 | Selection ranges | expand-selection: word → command → body → definition → file |
 | Document links | `source` paths, and `package require` → its `package provide` |
@@ -45,15 +45,15 @@ per-version with bindgen rather than hand-written.
 | Inlay hints | parameter names at call sites of user procs |
 | Code actions | brace an unbraced expression; correct a misspelled Tk option; add a missing `package require` |
 | Call hierarchy | incoming calls grouped by the calling proc, and outgoing calls |
-| Type hierarchy | TclOO `superclass` and `mixin`, in both directions |
+| Type hierarchy | TclOO `superclass`/`mixin` and itcl `inherit`, in both directions |
 | Code lens | workspace-wide reference count above each definition |
-| Formatting | via `tclfmt` |
+| Formatting | whole-document via `tclfmt`; on-type re-indent of a closing brace |
 | Incremental sync | buffer is the source of truth, never the file on disk |
 | Position encoding | negotiated; UTF-8 preferred, UTF-16 correct |
 
 The workspace is indexed on startup, so definitions resolve in files you have never
-opened. Not yet implemented: on-type formatting, and `snit`/`itcl` megawidgets.
-See [Roadmap](#roadmap).
+opened.
+See [Roadmap](#roadmap) for what is planned next.
 
 Name resolution follows Tcl's real rules — a `::`-prefixed name is absolute, and a bare
 name is looked up in the current namespace and then the global one, never in the levels
@@ -174,10 +174,10 @@ nix run .#regen-cmddb
   completion, formatting.
 - **Phase 2 — done.** References, highlights, workspace symbols, folding, selection
   ranges, document links, signature help.
-- **Phase 3 — mostly done.** Rename, semantic tokens, inlay hints and code actions have
-  landed; on-type formatting remains.
-- **Phase 4 — mostly done.** Call hierarchy, type hierarchy, code lens, and Tk `-option`
-  completion *and* validation have landed. `snit`/`itcl` megawidgets remain.
+- **Phase 3 — done.** Rename, semantic tokens, inlay hints, code actions and on-type
+  formatting.
+- **Phase 4 — done.** Call hierarchy, type hierarchy, code lens, Tk `-option` completion
+  and validation, and `snit`/`itcl` megawidgets.
 
 ## Prior art
 

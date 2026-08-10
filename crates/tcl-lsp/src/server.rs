@@ -14,10 +14,10 @@ use lsp_types::{
         CallHierarchyIncomingCalls, CallHierarchyOutgoingCalls, CallHierarchyPrepare,
         CodeActionRequest, CodeLensRequest, Completion, DocumentHighlightRequest,
         DocumentLinkRequest, DocumentSymbolRequest, FoldingRangeRequest, Formatting,
-        GotoDefinition, HoverRequest, InlayHintRequest, PrepareRenameRequest, References, Rename,
-        Request as _, SelectionRangeRequest, SemanticTokensFullRequest, SemanticTokensRangeRequest,
-        SignatureHelpRequest, TypeHierarchyPrepare, TypeHierarchySubtypes, TypeHierarchySupertypes,
-        WorkspaceSymbolRequest,
+        GotoDefinition, HoverRequest, InlayHintRequest, OnTypeFormatting, PrepareRenameRequest,
+        References, Rename, Request as _, SelectionRangeRequest, SemanticTokensFullRequest,
+        SemanticTokensRangeRequest, SignatureHelpRequest, TypeHierarchyPrepare,
+        TypeHierarchySubtypes, TypeHierarchySupertypes, WorkspaceSymbolRequest,
     },
     *,
 };
@@ -151,6 +151,10 @@ fn capabilities(encoding: PositionEncoding) -> ServerCapabilities {
         document_highlight_provider: Some(OneOf::Left(true)),
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         document_formatting_provider: Some(OneOf::Left(true)),
+        document_on_type_formatting_provider: Some(DocumentOnTypeFormattingOptions {
+            first_trigger_character: "}".to_string(),
+            more_trigger_character: None,
+        }),
         folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
         selection_range_provider: Some(SelectionRangeProviderCapability::Simple(true)),
         document_link_provider: Some(DocumentLinkOptions {
@@ -255,6 +259,9 @@ impl Server {
             }
             CodeLensRequest::METHOD => {
                 cast::<CodeLensRequest>(req).map(|(_, p)| self.code_lens(&p))
+            }
+            OnTypeFormatting::METHOD => {
+                cast::<OnTypeFormatting>(req).map(|(_, p)| self.on_type_formatting(&p))
             }
             TypeHierarchyPrepare::METHOD => {
                 cast::<TypeHierarchyPrepare>(req).map(|(_, p)| self.prepare_type_hierarchy(&p))
@@ -1015,6 +1022,72 @@ impl Server {
             .into_iter()
             .find(|(_, d)| d.kind == TclKind::Class)
             .map(|(_, d)| d.clone())
+    }
+
+    /// Re-indents the current line as you type its closing brace.
+    ///
+    /// Deliberately narrow: only the line the trigger sits on, and only when it
+    /// contains nothing but the brace and whitespace. Reformatting more than that
+    /// while someone is mid-edit moves text under the cursor, which is worse than
+    /// doing nothing.
+    fn on_type_formatting(&self, p: &DocumentOnTypeFormattingParams) -> serde_json::Value {
+        let uri = p.text_document_position.text_document.uri.to_string();
+        let Some(doc) = self.docs.get(&uri) else {
+            return serde_json::Value::Null;
+        };
+        if p.ch != "}" {
+            return json(Vec::<TextEdit>::new());
+        }
+        let text = doc.text();
+        let li = doc.line_index();
+        let line = p.text_document_position.position.line;
+        let start = li.offset(LinePos { line, character: 0 }, self.encoding);
+        let end = li.offset(
+            LinePos {
+                line,
+                character: u32::MAX,
+            },
+            self.encoding,
+        );
+        let Some(current) = text.get(start..end) else {
+            return json(Vec::<TextEdit>::new());
+        };
+        if current.trim() != "}" {
+            return json(Vec::<TextEdit>::new());
+        }
+
+        // Match the indentation of the line that opened this block. Tcl's own
+        // parser knows where that is: the closing brace ends some command, and
+        // that command's first line is the one to line up with.
+        //
+        // The brace's own offset is what to ask about, not the start of the line:
+        // the leading whitespace still lies *inside* the block, so asking there
+        // would find the last command of the body instead of the command the brace
+        // closes.
+        let script = tcl_syntax::Script::new(text);
+        let brace_at = start + current.find('}').unwrap_or(0);
+        let Some(open_line) = enclosing_open_line(&script, text, brace_at) else {
+            return json(Vec::<TextEdit>::new());
+        };
+        let indent: String = open_line
+            .chars()
+            .take_while(|c| *c == ' ' || *c == '\t')
+            .collect();
+        let existing: String = current
+            .chars()
+            .take_while(|c| *c == ' ' || *c == '\t')
+            .collect();
+        if indent == existing {
+            return json(Vec::<TextEdit>::new());
+        }
+        let edit = TextEdit {
+            range: Range_ {
+                start: Position { line, character: 0 },
+                end: to_position(li, start + existing.len(), self.encoding),
+            },
+            new_text: indent,
+        };
+        json(vec![edit])
     }
 
     /// Reference counts above each definition.
@@ -1844,6 +1917,31 @@ fn synopsis_parameters(label: &str) -> Vec<ParameterInformation> {
             documentation: None,
         })
         .collect()
+}
+
+/// The text of the line that opened the block a closing brace at `offset` ends.
+///
+/// Found by asking Tcl's parser which command spans the brace — the command's own
+/// first line is the one to align with — rather than by counting braces, which
+/// would be fooled by a `}` inside a string.
+fn enclosing_open_line<'a>(
+    script: &tcl_syntax::Script,
+    text: &'a str,
+    offset: usize,
+) -> Option<&'a str> {
+    let cmd = tcl_syntax::command_at(script, offset)?.command;
+    if cmd.range.start >= offset {
+        return None;
+    }
+    let line_start = text[..cmd.range.start]
+        .rfind('\n')
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    let line_end = text[line_start..]
+        .find('\n')
+        .map(|i| line_start + i)
+        .unwrap_or(text.len());
+    text.get(line_start..line_end)
 }
 
 /// The namespace a qualified name lives in: `::a::b::C` -> `::a::b`.
