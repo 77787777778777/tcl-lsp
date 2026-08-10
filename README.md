@@ -27,7 +27,7 @@ per-version with bindgen rather than hand-written.
 | Working today | Notes |
 |---|---|
 | Diagnostics | own parser, plus nagelfar and tclint |
-| Completion | workspace procs, Tcl/Tk builtins, in-scope variables after `$` |
+| Completion | workspace procs, Tcl/Tk builtins, in-scope variables after `$`, and Tk widget `-options` |
 | Hover | user procs with their doc comment; builtins from the man pages |
 | Go to definition | across the whole workspace, namespace-qualified |
 | Find references | command call sites across files |
@@ -156,7 +156,10 @@ nix run .#regen-cmddb
   ranges, document links, signature help.
 - **Phase 3 — mostly done.** Rename, semantic tokens, inlay hints and code actions have
   landed; on-type formatting remains.
-- **Phase 4** — call/type hierarchy, code lens, Tk `-option` validation, `snit`/`itcl`.
+- **Phase 4** — call/type hierarchy, code lens, `snit`/`itcl`. Tk `-option` *completion*
+  has landed; validating them is deliberately still open, because a widget also inherits
+  the standard options listed via `.SO`, which the generator does not yet resolve — so
+  flagging an unknown option today would produce false positives.
 
 ## Prior art
 

@@ -692,6 +692,12 @@ impl Server {
         let c = self.index.completions_at(&uri, offset);
         let mut items: Vec<CompletionItem> = Vec::new();
 
+        // Typing `-` inside a Tk widget command: offer that widget's own options,
+        // which the command database carries from each man page's `.OP` entries.
+        if let Some(opts) = self.option_completions(text, offset) {
+            return json(CompletionResponse::Array(opts));
+        }
+
         if wants_variable(text, offset) {
             for v in c.variables {
                 items.push(CompletionItem {
@@ -741,6 +747,46 @@ impl Server {
             }
         }
         json(CompletionResponse::Array(items))
+    }
+
+    /// `-option` completions for the command being typed, if it documents any.
+    ///
+    /// Returns `None` — rather than an empty list — when this is not an option
+    /// position, so the caller falls through to ordinary command completion.
+    fn option_completions(&self, text: &str, offset: usize) -> Option<Vec<CompletionItem>> {
+        // The word under the cursor has to actually start with a dash.
+        let start = text[..offset.min(text.len())]
+            .rfind(|c: char| c.is_whitespace() || c == '[' || c == '{')
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        if !text[start..offset.min(text.len())].starts_with('-') {
+            return None;
+        }
+
+        let script = tcl_syntax::Script::new(text);
+        let enclosing = tcl_syntax::command_at(&script, offset)?;
+        let name = enclosing.name?;
+        let cmd = self.kb.get(&name)?;
+        if cmd.options.is_empty() {
+            return None;
+        }
+        Some(
+            cmd.options
+                .iter()
+                .map(|o| CompletionItem {
+                    label: o.flag.clone(),
+                    kind: Some(CompletionItemKind::PROPERTY),
+                    detail: Some(if o.db_class.is_empty() {
+                        name.clone()
+                    } else {
+                        format!("{} ({})", name, o.db_class)
+                    }),
+                    documentation: (!o.doc.is_empty())
+                        .then(|| Documentation::String(o.doc.clone())),
+                    ..Default::default()
+                })
+                .collect(),
+        )
     }
 
     fn folding(&self, p: &FoldingRangeParams) -> serde_json::Value {

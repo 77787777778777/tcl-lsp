@@ -242,6 +242,18 @@ if {![string match {*\{$a + $b\}*} $ca]} {
 }
 puts "ok  codeAction offers to brace the expression"
 
+# --- Tk widget option completion, from the man pages' .OP entries
+set tksrc "ttk::button .b -\n"
+set tkdoc [string map [list \n \\n \" \\\"] $tksrc]
+send $srv "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file:///tk.tcl\",\"languageId\":\"tcl\",\"version\":1,\"text\":\"$tkdoc\"}}}"
+recv $srv
+send $srv {{"jsonrpc":"2.0","id":24,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///tk.tcl"},"position":{"line":0,"character":16}}}}
+set tkcomp [recv $srv]
+if {![string match {*"-command"*} $tkcomp]} {
+    puts "FAIL: no Tk option completion for ttk::button: $tkcomp"; exit 1
+}
+puts "ok  completion offers Tk widget options"
+
 # --- hover over a Tcl builtin comes from the generated command database
 set bsrc "lsort \[list 3 1 2\]\n"
 set bdoc2 [string map [list \n \\n \" \\\"] $bsrc]
