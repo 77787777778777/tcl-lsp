@@ -6,11 +6,14 @@ Most Tcl tooling approximates the language with regular expressions or a hand-wr
 grammar. That does not work well, because Tcl has no grammar independent of its
 implementation — quoting, brace nesting, backslash continuation and substitution rules are
 *defined by* `Tcl_ParseCommand`. So this server links against **libtcl itself** and uses
-Tcl's own parser as the authority on how a script splits into commands and words, with
-[tree-sitter-tcl] layered on top for fast, error-tolerant incremental reparsing while you
-are mid-keystroke.
+Tcl's own parser as the authority on how a script splits into commands and words.
 
-Status: **early development.** See [Roadmap](#roadmap).
+Editing a buffer that does not yet parse is the normal case, not an error case: an
+unterminated construct at the end of the document is reported as a warning rather than an
+error, and never as the red squiggle under your cursor that a naive implementation
+produces on every keystroke.
+
+Status: **usable.** Phases 1 and 2 are complete; see [Roadmap](#roadmap).
 
 ## Supported Tcl versions
 
@@ -119,8 +122,6 @@ published.
 
 ## Configuration
 
-Sent via `workspace/didChangeConfiguration` under the `tclLsp` key:
-
 Settings come from three places, in increasing precedence: environment variables,
 `initializationOptions`, and `workspace/didChangeConfiguration`. Changing the analysis
 target reloads the builtin database, and toggling a diagnostic backend re-reports every
@@ -191,7 +192,6 @@ nix run .#regen-cmddb
 Dual-licensed under either of [Apache-2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT) at your
 option.
 
-[tree-sitter-tcl]: https://github.com/tree-sitter-grammars/tree-sitter-tcl
 [nagelfar]: https://nagelfar.sourceforge.net/
 [tclint]: https://github.com/nmoroze/tclint
 [jdc8/lsp]: https://github.com/jdc8/lsp
