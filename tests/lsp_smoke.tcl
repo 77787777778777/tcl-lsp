@@ -301,6 +301,26 @@ if {[info exists ::env(TCL_LSP_NAGELFAR)]} {
     puts "--  skipped external analyser check (TCL_LSP_NAGELFAR unset)"
 }
 
+# --- didChangeConfiguration takes effect: switching off nagelfar must clear
+# the diagnostics it produced, without disturbing our own.
+if {[info exists ::env(TCL_LSP_NAGELFAR)]} {
+    send $srv {{"jsonrpc":"2.0","method":"workspace/didChangeConfiguration","params":{"settings":{"tclLsp":{"diagnostics":{"nagelfar":false,"tclint":false}}}}}}
+    # The server republishes every open document; find the one for bad.tcl.
+    set seen 0
+    for {set i 0} {$i < 8} {incr i} {
+        set msg [recv $srv]
+        if {[string match {*bad.tcl*} $msg]} {
+            if {[string match {*nagelfar*} $msg]} {
+                puts "FAIL: nagelfar diagnostics survived being switched off: $msg"; exit 1
+            }
+            set seen 1
+            break
+        }
+    }
+    if {!$seen} { puts "FAIL: no republished diagnostics after config change"; exit 1 }
+    puts "ok  didChangeConfiguration disables a diagnostic backend"
+}
+
 send $srv {{"jsonrpc":"2.0","id":9,"method":"shutdown","params":null}}
 recv $srv
 send $srv {{"jsonrpc":"2.0","method":"exit","params":null}}

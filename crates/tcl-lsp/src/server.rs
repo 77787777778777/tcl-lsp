@@ -7,8 +7,8 @@ use anyhow::Result;
 use lsp_server::{Connection, ExtractError, Message, Notification, Request, RequestId, Response};
 use lsp_types::{
     notification::{
-        DidChangeTextDocument, DidChangeWatchedFiles, DidCloseTextDocument, DidOpenTextDocument,
-        DidSaveTextDocument, Notification as _, PublishDiagnostics,
+        DidChangeConfiguration, DidChangeTextDocument, DidChangeWatchedFiles, DidCloseTextDocument,
+        DidOpenTextDocument, DidSaveTextDocument, Notification as _, PublishDiagnostics,
     },
     request::{
         CodeActionRequest, Completion, DocumentHighlightRequest, DocumentLinkRequest,
@@ -22,14 +22,16 @@ use lsp_types::{
 use tcl_analysis::{kb, uri_to_path, Index};
 use tcl_syntax::{Document, LineIndex, LinePos, PositionEncoding, Symbol, SymbolKind as TclKind};
 
+use crate::config::Config;
 use crate::external;
 
 pub struct Server {
     /// Buffers the editor has open. These override whatever is on disk.
     docs: HashMap<String, Document>,
     index: Index,
-    /// Documentation for Tcl's and Tk's own commands.
+    /// Documentation for Tcl and Tk own commands.
     kb: kb::Kb,
+    config: Config,
     encoding: PositionEncoding,
 }
 
@@ -62,18 +64,23 @@ pub fn run(connection: &Connection) -> Result<()> {
     };
     connection.initialize_finish(id, serde_json::to_value(init_result)?)?;
 
-    // Which command set to analyse against. Independent of the libtcl this binary
-    // is linked to — 8.6 and 9.0 parse alike — so it is a per-workspace setting.
-    let target = std::env::var("TCL_LSP_TCL_VERSION")
-        .map(|v| kb::Target::parse(&v))
-        .unwrap_or_default();
-    let kb = kb::builtin(target);
-    eprintln!("loaded {} builtin commands for {target:?}", kb.len());
+    // Environment first, then whatever the client sent with `initialize`.
+    let mut config = Config::default();
+    if let Some(opts) = params.initialization_options.as_ref() {
+        config.merge(opts);
+    }
+    let kb = kb::builtin(config.tcl_version);
+    eprintln!(
+        "loaded {} builtin commands for {:?}",
+        kb.len(),
+        config.tcl_version
+    );
 
     let mut server = Server {
         docs: HashMap::new(),
         index: Index::new(),
         kb,
+        config,
         encoding,
     };
 
@@ -309,6 +316,26 @@ impl Server {
                 }
                 send_diagnostics(conn, &uri, None, Vec::new())?;
             }
+            DidChangeConfiguration::METHOD => {
+                let p: DidChangeConfigurationParams = serde_json::from_value(note.params)?;
+                let target_moved = self.config.merge(&p.settings);
+                if target_moved {
+                    self.kb = kb::builtin(self.config.tcl_version);
+                    eprintln!(
+                        "reloaded {} builtin commands for {:?}",
+                        self.kb.len(),
+                        self.config.tcl_version
+                    );
+                }
+                // Diagnostics were produced under the old settings, so anything the
+                // user has open has to be re-reported or it silently goes stale.
+                let uris: Vec<String> = self.docs.keys().cloned().collect();
+                for uri in uris {
+                    if let Some(doc) = self.docs.get(&uri) {
+                        self.publish(conn, &uri, doc, true)?;
+                    }
+                }
+            }
             DidChangeWatchedFiles::METHOD => {
                 let p: DidChangeWatchedFilesParams = serde_json::from_value(note.params)?;
                 for change in p.changes {
@@ -335,10 +362,18 @@ impl Server {
         let mut diags = self.own_diagnostics(doc);
         if thorough {
             let li = doc.line_index();
-            for f in external::nagelfar(doc.text())
-                .into_iter()
-                .chain(external::tclint(doc.text()))
-            {
+            let mut findings = Vec::new();
+            if let Some(exe) = self.config.nagelfar.active() {
+                findings.extend(external::nagelfar(
+                    doc.text(),
+                    exe,
+                    self.config.nagelfar_db.as_deref(),
+                ));
+            }
+            if let Some(exe) = self.config.tclint.active() {
+                findings.extend(external::tclint(doc.text(), exe));
+            }
+            for f in findings {
                 diags.push(finding_to_diagnostic(f, li, self.encoding));
             }
         }
@@ -1226,7 +1261,10 @@ impl Server {
         let Some(doc) = self.docs.get(&uri) else {
             return serde_json::Value::Null;
         };
-        match external::tclfmt(doc.text()) {
+        let Some(exe) = self.config.tclfmt.active() else {
+            return json(Vec::<TextEdit>::new());
+        };
+        match external::tclfmt(doc.text(), exe) {
             Some(formatted) if formatted != doc.text() => {
                 let end = doc.line_index().position(doc.text().len(), self.encoding);
                 let edit = TextEdit {

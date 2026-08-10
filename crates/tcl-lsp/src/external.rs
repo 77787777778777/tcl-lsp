@@ -31,17 +31,6 @@ pub struct Finding {
     pub source: &'static str,
 }
 
-fn tool(env: &str, fallback: &str) -> String {
-    std::env::var(env).unwrap_or_else(|_| fallback.to_string())
-}
-
-fn enabled(env: &str) -> bool {
-    !matches!(
-        std::env::var(env).ok().as_deref(),
-        Some("0") | Some("false") | Some("off")
-    )
-}
-
 /// Writes `source` to a scratch file so a tool that has no stdin mode can read it.
 struct Scratch {
     path: PathBuf,
@@ -83,24 +72,19 @@ fn run(exe: &str, args: &[&std::ffi::OsStr]) -> Option<String> {
 /// Output with `-H` is `<file>: <line>: <S> <message>`, where `<S>` is `E`, `W` or
 /// `N`. Some messages continue onto unprefixed following lines; those are folded
 /// into the preceding finding rather than dropped.
-pub fn nagelfar(source: &str) -> Vec<Finding> {
-    if !enabled("TCL_LSP_NAGELFAR_ENABLE") {
-        return Vec::new();
-    }
-    let exe = tool("TCL_LSP_NAGELFAR", "nagelfar");
+pub fn nagelfar(source: &str, exe: &str, db: Option<&str>) -> Vec<Finding> {
     let Some(scratch) = Scratch::new(source, "nagelfar") else {
         return Vec::new();
     };
 
-    let db = std::env::var("TCL_LSP_NAGELFAR_DB").ok();
     let mut args: Vec<&std::ffi::OsStr> = vec!["-H".as_ref()];
-    if let Some(db) = db.as_deref() {
+    if let Some(db) = db {
         args.push("-s".as_ref());
         args.push(db.as_ref());
     }
     args.push(scratch.path.as_os_str());
 
-    let Some(text) = run(&exe, &args) else {
+    let Some(text) = run(exe, &args) else {
         return Vec::new();
     };
     if text.contains("No syntax database") {
@@ -158,15 +142,11 @@ fn parse_nagelfar_line(line: &str) -> Option<Finding> {
 ///
 /// Output is `<file>:<line>:<col>: <message>`, optionally ending in
 /// `[violation-code]`. Unlike nagelfar it reports real columns.
-pub fn tclint(source: &str) -> Vec<Finding> {
-    if !enabled("TCL_LSP_TCLINT_ENABLE") {
-        return Vec::new();
-    }
-    let exe = tool("TCL_LSP_TCLINT", "tclint");
+pub fn tclint(source: &str, exe: &str) -> Vec<Finding> {
     let Some(scratch) = Scratch::new(source, "tclint") else {
         return Vec::new();
     };
-    let Some(text) = run(&exe, &[scratch.path.as_os_str()]) else {
+    let Some(text) = run(exe, &[scratch.path.as_os_str()]) else {
         return Vec::new();
     };
     text.lines().filter_map(parse_tclint_line).collect()
@@ -212,10 +192,9 @@ fn parse_tclint_line(line: &str) -> Option<Finding> {
 ///
 /// `tclfmt` has neither a stdin mode nor a range mode, so the buffer goes through
 /// a temporary file and range formatting is necessarily whole-file.
-pub fn tclfmt(source: &str) -> Option<String> {
-    let exe = tool("TCL_LSP_TCLFMT", "tclfmt");
+pub fn tclfmt(source: &str, exe: &str) -> Option<String> {
     let scratch = Scratch::new(source, "tclfmt")?;
-    let out = Command::new(&exe)
+    let out = Command::new(exe)
         .arg(&scratch.path)
         .stdin(Stdio::null())
         .output()

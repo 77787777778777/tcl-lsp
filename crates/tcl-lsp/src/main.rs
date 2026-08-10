@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::print_stdout)]
 
+mod config;
 mod external;
 mod semantic;
 mod server;

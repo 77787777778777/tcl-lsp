@@ -120,9 +120,25 @@ published.
 
 Sent via `workspace/didChangeConfiguration` under the `tclLsp` key:
 
-Configuration is currently read from the environment; a `workspace/didChangeConfiguration`
-mapping is planned. The Nix wrapper sets each of these as a *default*, so your own
-environment always wins.
+Settings come from three places, in increasing precedence: environment variables,
+`initializationOptions`, and `workspace/didChangeConfiguration`. Changing the analysis
+target reloads the builtin database, and toggling a diagnostic backend re-reports every
+open document, so nothing goes stale.
+
+```jsonc
+{
+  "tclLsp": {
+    "tclVersion": "8.6",              // or "9.0"
+    "diagnostics": { "nagelfar": true, "tclint": true },
+    "nagelfar": { "path": "…", "syntaxDb": "…/syntaxdb86.tcl" },
+    "tclint": "/usr/bin/tclint",      // a bare string sets the path
+    "tclfmt": false                    // a bare boolean switches it off
+  }
+}
+```
+
+The environment variables below are the fallback. The Nix wrapper sets each as a
+*default*, so your own environment always wins.
 
 | Variable | Default | Meaning |
 |---|---|---|
