@@ -327,6 +327,22 @@ impl Walker<'_> {
             }
             self.collect_variable_refs(&cmd, ns);
 
+            // Descend into `[...]` substitutions. Unlike a braced word — where only
+            // the command's shape says whether it holds a script or an expression —
+            // a COMMAND token is unambiguously a script, because Tcl's own parser
+            // classified it as one. Without this, everything inside `[expr ...]` or
+            // `[myproc $x]` is invisible to references, hints and highlighting.
+            for t in &cmd.tokens {
+                if t.kind == TokenKind::Command && t.size >= 2 {
+                    let inner = t.start + 1..t.start + t.size - 1;
+                    if inner.end > inner.start {
+                        let mut kids = Vec::new();
+                        self.walk(inner, ns, Mode::Script, scope.clone(), &mut kids);
+                        into.append(&mut kids);
+                    }
+                }
+            }
+
             let words = cmd.words();
             let Some(head) = words.first().and_then(|w| literal(self.script, w)) else {
                 continue; // dynamically-named command; nothing statically knowable
@@ -891,6 +907,28 @@ mod tests {
     }
 
     // --- references -------------------------------------------------------
+
+    /// A `[...]` substitution is a script, and Tcl's parser has already said so.
+    /// Everything inside one used to be invisible to references and hints.
+    #[test]
+    fn descends_into_command_substitutions() {
+        let o = parse("proc helper {} {}\nset x [helper]\nputs [expr {1 + 2}]\n");
+        let names: Vec<&str> = o.calls.iter().map(|c| c.name.as_str()).collect();
+        assert!(names.contains(&"helper"), "got {names:?}");
+        assert!(names.contains(&"expr"), "got {names:?}");
+        assert!(
+            o.refs.iter().any(|r| r.name == "helper"),
+            "the call inside [...] must count as a reference"
+        );
+    }
+
+    #[test]
+    fn nested_substitutions_are_visited_once() {
+        let o = parse("puts [lindex [split $s] 0]\n");
+        let names: Vec<&str> = o.calls.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names.iter().filter(|n| **n == "split").count(), 1);
+        assert_eq!(names.iter().filter(|n| **n == "lindex").count(), 1);
+    }
 
     #[test]
     fn records_command_references() {

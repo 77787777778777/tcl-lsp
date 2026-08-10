@@ -40,13 +40,14 @@ per-version with bindgen rather than hand-written.
 | Rename | definition plus every call site; rewrites only the last segment of a qualified name |
 | Semantic tokens | full and range; user procs distinguished from Tcl's own commands |
 | Inlay hints | parameter names at call sites of user procs |
+| Code actions | brace an unbraced expression; add a missing `package require` |
 | Formatting | via `tclfmt` |
 | Incremental sync | buffer is the source of truth, never the file on disk |
 | Position encoding | negotiated; UTF-8 preferred, UTF-16 correct |
 
 The workspace is indexed on startup, so definitions resolve in files you have never
-opened. Not yet implemented: code actions, on-type formatting, and call or type
-hierarchies. See [Roadmap](#roadmap).
+opened. Not yet implemented: on-type formatting, code lens, and call or type hierarchies.
+See [Roadmap](#roadmap).
 
 Name resolution follows Tcl's real rules — a `::`-prefixed name is absolute, and a bare
 name is looked up in the current namespace and then the global one, never in the levels
@@ -56,7 +57,7 @@ Diagnostics come from three independently toggleable sources:
 
 | Source | Provides |
 |---|---|
-| built-in analysis | parse errors, unresolved names, arity mismatches |
+| built-in analysis | parse errors, and unbraced expressions in `expr`/`if`/`while`/`for` |
 | [nagelfar] | unknown variables, bad `expr`, wrong argument counts, invalid builtin options |
 | [tclint] | style and lint rules (already reports precise columns) |
 
@@ -153,8 +154,8 @@ nix run .#regen-cmddb
   completion, formatting.
 - **Phase 2 — done.** References, highlights, workspace symbols, folding, selection
   ranges, document links, signature help.
-- **Phase 3 — mostly done.** Rename, semantic tokens and inlay hints have landed; code
-  actions and on-type formatting remain.
+- **Phase 3 — mostly done.** Rename, semantic tokens, inlay hints and code actions have
+  landed; on-type formatting remains.
 - **Phase 4** — call/type hierarchy, code lens, Tk `-option` validation, `snit`/`itcl`.
 
 ## Prior art

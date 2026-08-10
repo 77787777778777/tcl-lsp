@@ -11,11 +11,11 @@ use lsp_types::{
         DidSaveTextDocument, Notification as _, PublishDiagnostics,
     },
     request::{
-        Completion, DocumentHighlightRequest, DocumentLinkRequest, DocumentSymbolRequest,
-        FoldingRangeRequest, Formatting, GotoDefinition, HoverRequest, InlayHintRequest,
-        PrepareRenameRequest, References, Rename, Request as _, SelectionRangeRequest,
-        SemanticTokensFullRequest, SemanticTokensRangeRequest, SignatureHelpRequest,
-        WorkspaceSymbolRequest,
+        CodeActionRequest, Completion, DocumentHighlightRequest, DocumentLinkRequest,
+        DocumentSymbolRequest, FoldingRangeRequest, Formatting, GotoDefinition, HoverRequest,
+        InlayHintRequest, PrepareRenameRequest, References, Rename, Request as _,
+        SelectionRangeRequest, SemanticTokensFullRequest, SemanticTokensRangeRequest,
+        SignatureHelpRequest, WorkspaceSymbolRequest,
     },
     *,
 };
@@ -154,6 +154,7 @@ fn capabilities(encoding: PositionEncoding) -> ServerCapabilities {
             },
         )),
         inlay_hint_provider: Some(OneOf::Left(true)),
+        code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
         rename_provider: Some(OneOf::Right(RenameOptions {
             prepare_provider: Some(true),
             work_done_progress_options: Default::default(),
@@ -217,6 +218,9 @@ impl Server {
                 cast::<PrepareRenameRequest>(req).map(|(_, p)| self.prepare_rename(&p))
             }
             Rename::METHOD => cast::<Rename>(req).map(|(_, p)| self.rename(&p)),
+            CodeActionRequest::METHOD => {
+                cast::<CodeActionRequest>(req).map(|(_, p)| self.code_actions(&p))
+            }
             InlayHintRequest::METHOD => {
                 cast::<InlayHintRequest>(req).map(|(_, p)| self.inlay_hints(&p))
             }
@@ -344,7 +348,7 @@ impl Server {
     fn own_diagnostics(&self, doc: &Document) -> Vec<Diagnostic> {
         let outline = doc.outline();
         let text = doc.text();
-        outline
+        let mut out: Vec<Diagnostic> = outline
             .errors
             .iter()
             .filter(|e| {
@@ -364,7 +368,120 @@ impl Server {
                 message: e.message.clone(),
                 ..Default::default()
             })
-            .collect()
+            .collect();
+
+        for range in unbraced_expressions(&outline, text) {
+            out.push(Diagnostic {
+                range: to_range(doc.line_index(), range, self.encoding),
+                severity: Some(DiagnosticSeverity::WARNING),
+                code: Some(NumberOrString::String("unbraced-expr".into())),
+                source: Some("tcl-lsp".to_string()),
+                message: "expression is not braced: it will be substituted before \
+                          evaluation, which is slower and can change the result"
+                    .to_string(),
+                ..Default::default()
+            });
+        }
+        out
+    }
+
+    /// Quick fixes and refactorings at a position.
+    fn code_actions(&self, p: &CodeActionParams) -> serde_json::Value {
+        let uri = p.text_document.uri.to_string();
+        let Some(doc) = self.docs.get(&uri) else {
+            return serde_json::Value::Null;
+        };
+        let li = doc.line_index();
+        let from = li.offset(to_linepos(p.range.start), self.encoding);
+        let to = li.offset(to_linepos(p.range.end), self.encoding);
+        let outline = doc.outline();
+        let text = doc.text();
+
+        let mut actions: Vec<CodeActionOrCommand> = Vec::new();
+
+        // Brace an unbraced expression.
+        for range in unbraced_expressions(&outline, text) {
+            if range.end < from || range.start > to {
+                continue;
+            }
+            let Some(inner) = text.get(range.clone()) else {
+                continue;
+            };
+            let edit = TextEdit {
+                range: to_range(li, range.clone(), self.encoding),
+                new_text: format!("{{{inner}}}"),
+            };
+            actions.push(CodeActionOrCommand::CodeAction(CodeAction {
+                title: "Brace the expression".to_string(),
+                kind: Some(CodeActionKind::QUICKFIX),
+                edit: Some(WorkspaceEdit {
+                    changes: Some(single_change(&uri, vec![edit])),
+                    ..Default::default()
+                }),
+                is_preferred: Some(true),
+                ..Default::default()
+            }));
+        }
+
+        // Add a missing `package require` for a command defined in a file that
+        // declares a package this one never requires.
+        if let Some(action) = self.add_package_require(&uri, doc, &outline, from) {
+            actions.push(CodeActionOrCommand::CodeAction(action));
+        }
+
+        json(actions)
+    }
+
+    fn add_package_require(
+        &self,
+        uri: &str,
+        doc: &Document,
+        outline: &tcl_syntax::Outline,
+        offset: usize,
+    ) -> Option<CodeAction> {
+        let word = word_at(doc.text(), offset)?;
+        let ns = namespace_at(&outline.symbols, offset);
+        let hits = self.index.resolve(&word, &ns);
+        let (def_uri, _) = hits.first()?;
+        if *def_uri == uri {
+            return None; // defined right here; nothing to require
+        }
+        let provider = self.index.file(def_uri)?;
+        let package = provider.outline.provides.first()?.name.clone();
+
+        let already = outline
+            .links
+            .iter()
+            .any(|l| l.kind == tcl_syntax::LinkKind::PackageRequire && l.name == package);
+        if already {
+            return None;
+        }
+
+        // Insert after any existing `package require`, else at the very top.
+        let insert_at = outline
+            .links
+            .iter()
+            .filter(|l| l.kind == tcl_syntax::LinkKind::PackageRequire)
+            .map(|l| line_end_offset(doc.text(), l.range.end))
+            .max()
+            .unwrap_or(0);
+        let pos = to_position(doc.line_index(), insert_at, self.encoding);
+        let edit = TextEdit {
+            range: Range_ {
+                start: pos,
+                end: pos,
+            },
+            new_text: format!("package require {package}\n"),
+        };
+        Some(CodeAction {
+            title: format!("Add `package require {package}`"),
+            kind: Some(CodeActionKind::QUICKFIX),
+            edit: Some(WorkspaceEdit {
+                changes: Some(single_change(uri, vec![edit])),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
     }
 
     // --- helpers ---------------------------------------------------------
@@ -1261,6 +1378,59 @@ fn namespace_at(symbols: &[Symbol], offset: usize) -> String {
     let mut best = "::".to_string();
     rec(symbols, offset, "::", &mut best);
     best
+}
+
+/// Byte ranges of expression arguments that were written without braces.
+///
+/// `expr $a + $b` is substituted before evaluation: slower, and a value carrying
+/// an operator changes what gets evaluated. Bracing is Tcl's standard advice. The
+/// same applies to the condition of `if`, `while` and `for`.
+fn unbraced_expressions(outline: &tcl_syntax::Outline, text: &str) -> Vec<Range<usize>> {
+    let mut out = Vec::new();
+    for call in &outline.calls {
+        let expr_arg = match call.name.trim_start_matches("::") {
+            "expr" | "while" | "if" => 0,
+            // `for start test next body`
+            "for" => 1,
+            _ => continue,
+        };
+        let Some(first) = call.args.get(expr_arg) else {
+            continue;
+        };
+        // A braced word is already correct.
+        if text.get(first.clone()).is_some_and(|s| s.starts_with('{')) {
+            continue;
+        }
+        // `expr` concatenates all its arguments, so the whole tail is the
+        // expression; the others take exactly one word.
+        let end = if call.name.ends_with("expr") {
+            call.args.last().map(|a| a.end).unwrap_or(first.end)
+        } else {
+            first.end
+        };
+        if end > first.start {
+            out.push(first.start..end);
+        }
+    }
+    out
+}
+
+/// Offset of the end of the line containing `offset`, just past its newline.
+fn line_end_offset(text: &str, offset: usize) -> usize {
+    match text[offset.min(text.len())..].find('\n') {
+        Some(i) => offset + i + 1,
+        None => text.len(),
+    }
+}
+
+/// A one-file `WorkspaceEdit` change map.
+#[allow(clippy::mutable_key_type)] // see the note on `Server::rename`
+fn single_change(uri: &str, edits: Vec<TextEdit>) -> HashMap<Uri, Vec<TextEdit>> {
+    let mut map = HashMap::new();
+    if let Some(u) = parse_uri(uri) {
+        map.insert(u, edits);
+    }
+    map
 }
 
 /// The sub-range covering just the final `::`-separated segment of a name.

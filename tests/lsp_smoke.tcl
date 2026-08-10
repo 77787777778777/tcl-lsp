@@ -222,6 +222,26 @@ if {![string match {*"s:"*} $hints]} {
 }
 puts "ok  inlayHint labels arguments with parameter names"
 
+# --- unbraced expr is diagnosed, and offered a quick fix
+set exprsrc "set a 1\nset b 2\nset c \[expr \$a + \$b\]\n"
+set exprdoc [string map [list \n \\n \" \\\"] $exprsrc]
+send $srv "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file:///expr.tcl\",\"languageId\":\"tcl\",\"version\":1,\"text\":\"$exprdoc\"}}}"
+set ediag [recv $srv]
+if {![string match {*unbraced-expr*} $ediag]} {
+    puts "FAIL: unbraced expr not diagnosed: $ediag"; exit 1
+}
+puts "ok  unbraced expr is diagnosed"
+
+send $srv {{"jsonrpc":"2.0","id":23,"method":"textDocument/codeAction","params":{"textDocument":{"uri":"file:///expr.tcl"},"range":{"start":{"line":2,"character":13},"end":{"line":2,"character":13}},"context":{"diagnostics":[]}}}}
+set ca [recv $srv]
+if {![string match {*Brace the expression*} $ca]} {
+    puts "FAIL: no brace-the-expression quick fix: $ca"; exit 1
+}
+if {![string match {*\{$a + $b\}*} $ca]} {
+    puts "FAIL: quick fix did not wrap the whole expression: $ca"; exit 1
+}
+puts "ok  codeAction offers to brace the expression"
+
 # --- hover over a Tcl builtin comes from the generated command database
 set bsrc "lsort \[list 3 1 2\]\n"
 set bdoc2 [string map [list \n \\n \" \\\"] $bsrc]
