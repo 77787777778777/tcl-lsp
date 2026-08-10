@@ -201,6 +201,53 @@ impl Index {
         })
     }
 
+    /// Counts references to each of `targets`, in a single pass over the workspace.
+    ///
+    /// Calling [`Index::references`] once per definition would rescan every file
+    /// each time; a document with a hundred procs would then walk the whole
+    /// workspace a hundred times. Here the refs are visited once, and the cheap
+    /// last-segment check rejects almost all of them before any resolution.
+    pub fn reference_counts<'a>(
+        &self,
+        targets: impl IntoIterator<Item = &'a str>,
+    ) -> HashMap<String, usize> {
+        let targets: Vec<String> = targets.into_iter().map(str::to_owned).collect();
+        let mut counts: HashMap<String, usize> = targets.iter().map(|t| (t.clone(), 0)).collect();
+
+        let mut by_tail: HashMap<&str, Vec<&String>> = HashMap::new();
+        for t in &targets {
+            by_tail
+                .entry(t.rsplit("::").next().unwrap_or(t))
+                .or_default()
+                .push(t);
+        }
+
+        for f in self.files.values() {
+            for r in &f.outline.refs {
+                if r.kind != RefKind::Command {
+                    continue;
+                }
+                let tail = r.name.rsplit("::").next().unwrap_or(&r.name);
+                let Some(candidates) = by_tail.get(tail) else {
+                    continue;
+                };
+                let resolved = tcl_syntax::qualify(&r.namespace, &r.name);
+                for t in candidates {
+                    let hit = if r.name.starts_with("::") {
+                        r.name == **t
+                    } else {
+                        resolved == **t || r.name == tail
+                    };
+                    if hit {
+                        *counts.entry((*t).clone()).or_default() += 1;
+                        break;
+                    }
+                }
+            }
+        }
+        counts
+    }
+
     /// Fuzzy-ish search over qualified names, for `workspace/symbol`.
     pub fn search(&self, query: &str, limit: usize) -> Vec<(&str, &Def)> {
         let q = query.to_lowercase();
@@ -406,6 +453,36 @@ mod tests {
         ]);
         let refs = idx.references("::greet");
         assert_eq!(refs.len(), 3, "one call in a.tcl, two in b.tcl");
+    }
+
+    #[test]
+    fn counts_references_in_one_pass() {
+        let idx = index(&[
+            (
+                "file:///a.tcl",
+                "proc greet {} {}\nproc other {} {}\ngreet\n",
+            ),
+            ("file:///b.tcl", "greet\ngreet\nother\n"),
+        ]);
+        let counts = idx.reference_counts(["::greet", "::other"]);
+        assert_eq!(counts["::greet"], 3);
+        assert_eq!(counts["::other"], 1);
+    }
+
+    #[test]
+    fn reference_counts_agree_with_the_per_name_lookup() {
+        let idx = index(&[(
+            "file:///a.tcl",
+            "namespace eval util { proc trim {s} {} }\nutil::trim a\nutil::trim b\n",
+        )]);
+        let counts = idx.reference_counts(["::util::trim"]);
+        assert_eq!(counts["::util::trim"], idx.references("::util::trim").len());
+    }
+
+    #[test]
+    fn an_unreferenced_definition_counts_zero() {
+        let idx = index(&[("file:///a.tcl", "proc lonely {} {}\n")]);
+        assert_eq!(idx.reference_counts(["::lonely"])["::lonely"], 0);
     }
 
     #[test]

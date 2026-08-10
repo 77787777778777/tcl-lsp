@@ -222,6 +222,22 @@ if {![string match {*"s:"*} $hints]} {
 }
 puts "ok  inlayHint labels arguments with parameter names"
 
+# --- codeLens shows reference counts above definitions
+send $srv {{"jsonrpc":"2.0","id":28,"method":"textDocument/codeLens","params":{"textDocument":{"uri":"file:///t.tcl"}}}}
+set lens [recv $srv]
+if {![string match {*references*} $lens]} {
+    puts "FAIL: no reference-count lenses: $lens"; exit 1
+}
+# Three, not two: the two calls in this buffer plus the one in the workspace's
+# main.tcl. Counting across the whole workspace is the point of the feature.
+if {![string match {*3 references*} $lens]} {
+    puts "FAIL: expected util::trim to show 3 references: $lens"; exit 1
+}
+if {![string match {*0 references*} $lens]} {
+    puts "FAIL: expected an uncalled definition to show 0 references: $lens"; exit 1
+}
+puts "ok  codeLens counts references above each definition"
+
 # --- call hierarchy: prepare, then incoming and outgoing calls
 send $srv {{"jsonrpc":"2.0","id":25,"method":"textDocument/prepareCallHierarchy","params":{"textDocument":{"uri":"file:///t.tcl"},"position":{"line":1,"character":9}}}}
 set prepch [recv $srv]

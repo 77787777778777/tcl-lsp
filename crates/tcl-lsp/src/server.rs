@@ -12,10 +12,10 @@ use lsp_types::{
     },
     request::{
         CallHierarchyIncomingCalls, CallHierarchyOutgoingCalls, CallHierarchyPrepare,
-        CodeActionRequest, Completion, DocumentHighlightRequest, DocumentLinkRequest,
-        DocumentSymbolRequest, FoldingRangeRequest, Formatting, GotoDefinition, HoverRequest,
-        InlayHintRequest, PrepareRenameRequest, References, Rename, Request as _,
-        SelectionRangeRequest, SemanticTokensFullRequest, SemanticTokensRangeRequest,
+        CodeActionRequest, CodeLensRequest, Completion, DocumentHighlightRequest,
+        DocumentLinkRequest, DocumentSymbolRequest, FoldingRangeRequest, Formatting,
+        GotoDefinition, HoverRequest, InlayHintRequest, PrepareRenameRequest, References, Rename,
+        Request as _, SelectionRangeRequest, SemanticTokensFullRequest, SemanticTokensRangeRequest,
         SignatureHelpRequest, WorkspaceSymbolRequest,
     },
     *,
@@ -164,6 +164,9 @@ fn capabilities(encoding: PositionEncoding) -> ServerCapabilities {
         inlay_hint_provider: Some(OneOf::Left(true)),
         call_hierarchy_provider: Some(CallHierarchyServerCapability::Simple(true)),
         code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
+        code_lens_provider: Some(CodeLensOptions {
+            resolve_provider: Some(false),
+        }),
         rename_provider: Some(OneOf::Right(RenameOptions {
             prepare_provider: Some(true),
             work_done_progress_options: Default::default(),
@@ -235,6 +238,9 @@ impl Server {
             }
             CallHierarchyOutgoingCalls::METHOD => {
                 cast::<CallHierarchyOutgoingCalls>(req).map(|(_, p)| self.outgoing_calls(&p))
+            }
+            CodeLensRequest::METHOD => {
+                cast::<CodeLensRequest>(req).map(|(_, p)| self.code_lens(&p))
             }
             CodeActionRequest::METHOD => {
                 cast::<CodeActionRequest>(req).map(|(_, p)| self.code_actions(&p))
@@ -844,6 +850,51 @@ impl Server {
         let li = doc.line_index();
         let mut out = Vec::new();
         collect_folds(&outline.symbols, li, self.encoding, &mut out);
+        json(out)
+    }
+
+    /// Reference counts above each definition.
+    fn code_lens(&self, p: &CodeLensParams) -> serde_json::Value {
+        let uri = p.text_document.uri.to_string();
+        let Some(f) = self.index.file(&uri) else {
+            return serde_json::Value::Null;
+        };
+        let named: Vec<&tcl_analysis::Def> = f
+            .defs
+            .iter()
+            .filter(|d| {
+                matches!(
+                    d.kind,
+                    TclKind::Proc | TclKind::Method | TclKind::Class | TclKind::Namespace
+                )
+            })
+            .collect();
+        let counts = self
+            .index
+            .reference_counts(named.iter().map(|d| d.qname.as_str()));
+
+        let mut out = Vec::new();
+        for def in named {
+            let n = counts.get(&def.qname).copied().unwrap_or(0);
+            let Some(range) = self.range_in(&uri, def.name_range.clone()) else {
+                continue;
+            };
+            out.push(CodeLens {
+                range,
+                command: Some(lsp_types::Command {
+                    title: if n == 1 {
+                        "1 reference".to_string()
+                    } else {
+                        format!("{n} references")
+                    },
+                    // Clients bind this to "show references" themselves; there is no
+                    // server-side command to execute.
+                    command: String::new(),
+                    arguments: None,
+                }),
+                data: None,
+            });
+        }
         json(out)
     }
 
