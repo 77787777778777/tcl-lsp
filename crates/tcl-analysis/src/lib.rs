@@ -77,6 +77,11 @@ impl Index {
         self.files.get(uri)
     }
 
+    /// Every indexed file, for whole-workspace passes such as call hierarchy.
+    pub fn files(&self) -> impl Iterator<Item = (&str, &FileIndex)> {
+        self.files.iter().map(|(k, v)| (k.as_str(), v))
+    }
+
     pub fn contains(&self, uri: &str) -> bool {
         self.files.contains_key(uri)
     }

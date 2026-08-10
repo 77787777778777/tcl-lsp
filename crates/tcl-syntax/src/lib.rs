@@ -13,7 +13,7 @@ pub mod selection;
 
 pub use line_index::{LineIndex, LinePos, PositionEncoding};
 pub use outline::{
-    outline, qualify, split_args, LinkKind, LinkRef, Outline, Provide, Ref, RefKind, Symbol,
+    outline, qualify, split_args, Call, LinkKind, LinkRef, Outline, Provide, Ref, RefKind, Symbol,
     SymbolKind, SyntaxError, VarDef,
 };
 pub use selection::{command_at, selection_chain, Enclosing};

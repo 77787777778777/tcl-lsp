@@ -222,6 +222,34 @@ if {![string match {*"s:"*} $hints]} {
 }
 puts "ok  inlayHint labels arguments with parameter names"
 
+# --- call hierarchy: prepare, then incoming and outgoing calls
+send $srv {{"jsonrpc":"2.0","id":25,"method":"textDocument/prepareCallHierarchy","params":{"textDocument":{"uri":"file:///t.tcl"},"position":{"line":1,"character":9}}}}
+set prepch [recv $srv]
+if {![string match {*::util::trim*} $prepch]} {
+    puts "FAIL: prepareCallHierarchy did not anchor on util::trim: $prepch"; exit 1
+}
+puts "ok  prepareCallHierarchy anchors on the proc under the cursor"
+
+# Feed an item back, as a real client would. Built here rather than sliced out
+# of the response with a regex: `prepareCallHierarchy` legitimately returns one
+# item per definition, and this workspace defines ::util::trim in two files.
+set item {{"name":"::util::trim","kind":12,"uri":"file:///t.tcl","range":{"start":{"line":1,"character":4},"end":{"line":2,"character":0}},"selectionRange":{"start":{"line":1,"character":9},"end":{"line":1,"character":13}},"data":{"uri":"file:///t.tcl","qname":"::util::trim"}}}
+send $srv "{\"jsonrpc\":\"2.0\",\"id\":26,\"method\":\"callHierarchy/incomingCalls\",\"params\":{\"item\":$item}}"
+set inc [recv $srv]
+if {![string match {*::caller*} $inc]} {
+    puts "FAIL: incomingCalls did not attribute the calls to ::caller: $inc"; exit 1
+}
+set nfrom [regexp -all {"fromRanges"} $inc]
+if {$nfrom < 1} { puts "FAIL: incomingCalls returned no ranges: $inc"; exit 1 }
+puts "ok  incomingCalls groups call sites by their enclosing proc"
+
+send $srv "{\"jsonrpc\":\"2.0\",\"id\":27,\"method\":\"callHierarchy/outgoingCalls\",\"params\":{\"item\":$item}}"
+set outg [recv $srv]
+if {![string match {*"to"*} $outg] && ![string match {*result*} $outg]} {
+    puts "FAIL: outgoingCalls malformed: $outg"; exit 1
+}
+puts "ok  outgoingCalls responds for a leaf proc"
+
 # --- unbraced expr is diagnosed, and offered a quick fix
 set exprsrc "set a 1\nset b 2\nset c \[expr \$a + \$b\]\n"
 set exprdoc [string map [list \n \\n \" \\\"] $exprsrc]

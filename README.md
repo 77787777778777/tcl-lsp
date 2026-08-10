@@ -41,12 +41,13 @@ per-version with bindgen rather than hand-written.
 | Semantic tokens | full and range; user procs distinguished from Tcl's own commands |
 | Inlay hints | parameter names at call sites of user procs |
 | Code actions | brace an unbraced expression; add a missing `package require` |
+| Call hierarchy | incoming calls grouped by the calling proc, and outgoing calls |
 | Formatting | via `tclfmt` |
 | Incremental sync | buffer is the source of truth, never the file on disk |
 | Position encoding | negotiated; UTF-8 preferred, UTF-16 correct |
 
 The workspace is indexed on startup, so definitions resolve in files you have never
-opened. Not yet implemented: on-type formatting, code lens, and call or type hierarchies.
+opened. Not yet implemented: on-type formatting, code lens, and type hierarchy.
 See [Roadmap](#roadmap).
 
 Name resolution follows Tcl's real rules — a `::`-prefixed name is absolute, and a bare
@@ -172,10 +173,11 @@ nix run .#regen-cmddb
   ranges, document links, signature help.
 - **Phase 3 — mostly done.** Rename, semantic tokens, inlay hints and code actions have
   landed; on-type formatting remains.
-- **Phase 4** — call/type hierarchy, code lens, `snit`/`itcl`. Tk `-option` *completion*
-  has landed; validating them is deliberately still open, because a widget also inherits
-  the standard options listed via `.SO`, which the generator does not yet resolve — so
-  flagging an unknown option today would produce false positives.
+- **Phase 4 — started.** Call hierarchy and Tk `-option` completion have landed. Type
+  hierarchy, code lens and `snit`/`itcl` remain. Validating Tk options is deliberately
+  still open: a widget also inherits the standard options listed via `.SO`, which the
+  generator does not yet resolve, so flagging an unknown option today would fire on
+  correct code.
 
 ## Prior art
 

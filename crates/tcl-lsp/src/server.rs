@@ -11,6 +11,7 @@ use lsp_types::{
         DidOpenTextDocument, DidSaveTextDocument, Notification as _, PublishDiagnostics,
     },
     request::{
+        CallHierarchyIncomingCalls, CallHierarchyOutgoingCalls, CallHierarchyPrepare,
         CodeActionRequest, Completion, DocumentHighlightRequest, DocumentLinkRequest,
         DocumentSymbolRequest, FoldingRangeRequest, Formatting, GotoDefinition, HoverRequest,
         InlayHintRequest, PrepareRenameRequest, References, Rename, Request as _,
@@ -161,6 +162,7 @@ fn capabilities(encoding: PositionEncoding) -> ServerCapabilities {
             },
         )),
         inlay_hint_provider: Some(OneOf::Left(true)),
+        call_hierarchy_provider: Some(CallHierarchyServerCapability::Simple(true)),
         code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
         rename_provider: Some(OneOf::Right(RenameOptions {
             prepare_provider: Some(true),
@@ -225,6 +227,15 @@ impl Server {
                 cast::<PrepareRenameRequest>(req).map(|(_, p)| self.prepare_rename(&p))
             }
             Rename::METHOD => cast::<Rename>(req).map(|(_, p)| self.rename(&p)),
+            CallHierarchyPrepare::METHOD => {
+                cast::<CallHierarchyPrepare>(req).map(|(_, p)| self.prepare_call_hierarchy(&p))
+            }
+            CallHierarchyIncomingCalls::METHOD => {
+                cast::<CallHierarchyIncomingCalls>(req).map(|(_, p)| self.incoming_calls(&p))
+            }
+            CallHierarchyOutgoingCalls::METHOD => {
+                cast::<CallHierarchyOutgoingCalls>(req).map(|(_, p)| self.outgoing_calls(&p))
+            }
             CodeActionRequest::METHOD => {
                 cast::<CodeActionRequest>(req).map(|(_, p)| self.code_actions(&p))
             }
@@ -836,6 +847,184 @@ impl Server {
         json(out)
     }
 
+    /// Anchors a call-hierarchy session on the proc under the cursor.
+    fn prepare_call_hierarchy(&self, p: &CallHierarchyPrepareParams) -> serde_json::Value {
+        let uri = p
+            .text_document_position_params
+            .text_document
+            .uri
+            .to_string();
+        let Some((word, ns)) = self.word_and_ns(&uri, p.text_document_position_params.position)
+        else {
+            return serde_json::Value::Null;
+        };
+        let hits = self.index.resolve(&word, &ns);
+        let items: Vec<CallHierarchyItem> = hits
+            .iter()
+            .filter_map(|(u, d)| self.hierarchy_item(u, d))
+            .collect();
+        if items.is_empty() {
+            return serde_json::Value::Null;
+        }
+        json(items)
+    }
+
+    fn hierarchy_item(&self, uri: &str, def: &tcl_analysis::Def) -> Option<CallHierarchyItem> {
+        Some(CallHierarchyItem {
+            name: def.qname.clone(),
+            kind: to_lsp_kind(def.kind),
+            tags: None,
+            detail: def.detail.clone(),
+            uri: parse_uri(uri)?,
+            range: self.range_in(uri, def.full_range.clone())?,
+            selection_range: self.range_in(uri, def.name_range.clone())?,
+            // Carried through the round trip so the follow-up requests need no
+            // position lookup of their own.
+            data: Some(serde_json::json!({ "uri": uri, "qname": def.qname })),
+        })
+    }
+
+    /// The qualified name a call refers to, or `None` if it resolves to nothing.
+    ///
+    /// Cheap tail comparison first: `resolve` scans every file, so running it on
+    /// every call in a large workspace would be quadratic.
+    fn call_target(&self, call: &tcl_syntax::Call, want_tail: Option<&str>) -> Option<String> {
+        let tail = call.name.rsplit("::").next().unwrap_or(&call.name);
+        if want_tail.is_some_and(|w| w != tail) {
+            return None;
+        }
+        let hits = self.index.resolve(&call.name, &call.namespace);
+        hits.first().map(|(_, d)| d.qname.clone())
+    }
+
+    fn incoming_calls(&self, p: &CallHierarchyIncomingCallsParams) -> serde_json::Value {
+        let Some(target) = p.item.data.as_ref().and_then(|d| d.get("qname")) else {
+            return serde_json::Value::Null;
+        };
+        let target = target.as_str().unwrap_or_default().to_string();
+        let tail = target.rsplit("::").next().unwrap_or(&target).to_string();
+
+        // Grouped by the proc the call site sits in.
+        let mut grouped: HashMap<(String, String), Vec<Range<usize>>> = HashMap::new();
+        for (uri, f) in self.index.files() {
+            for call in &f.outline.calls {
+                if self.call_target(call, Some(&tail)).as_deref() != Some(target.as_str()) {
+                    continue;
+                }
+                let caller = enclosing_def(&f.outline.symbols, call.name_range.start)
+                    .map(|s| s.qname.clone())
+                    // A call at file scope has no enclosing proc; attribute it to
+                    // the file itself rather than dropping it.
+                    .unwrap_or_else(|| "<file scope>".to_string());
+                grouped
+                    .entry((uri.to_string(), caller))
+                    .or_default()
+                    .push(call.name_range.clone());
+            }
+        }
+
+        let mut out = Vec::new();
+        for ((uri, caller), ranges) in grouped {
+            let from = match self.index.resolve(&caller, "::").first() {
+                Some((u, d)) => self.hierarchy_item(u, d),
+                None => self.file_scope_item(&uri),
+            };
+            let Some(from) = from else { continue };
+            out.push(CallHierarchyIncomingCall {
+                from,
+                from_ranges: ranges
+                    .into_iter()
+                    .filter_map(|r| self.range_in(&uri, r))
+                    .collect(),
+            });
+        }
+        json(out)
+    }
+
+    fn outgoing_calls(&self, p: &CallHierarchyOutgoingCallsParams) -> serde_json::Value {
+        let data = p.item.data.as_ref();
+        let Some(uri) = data.and_then(|d| d.get("uri")).and_then(|v| v.as_str()) else {
+            return serde_json::Value::Null;
+        };
+        let Some(f) = self.index.file(uri) else {
+            return serde_json::Value::Null;
+        };
+        let Some(body) = self
+            .range_of_item(&p.item, f)
+            .or_else(|| Some(0..f.outline.symbols.first()?.full_range.end))
+        else {
+            return serde_json::Value::Null;
+        };
+
+        let mut grouped: HashMap<String, Vec<Range<usize>>> = HashMap::new();
+        for call in &f.outline.calls {
+            if !body.contains(&call.name_range.start) {
+                continue;
+            }
+            let Some(qname) = self.call_target(call, None) else {
+                continue;
+            };
+            grouped
+                .entry(qname)
+                .or_default()
+                .push(call.name_range.clone());
+        }
+
+        let mut out = Vec::new();
+        for (qname, ranges) in grouped {
+            let Some((u, d)) = self.index.resolve(&qname, "::").first().copied() else {
+                continue;
+            };
+            let Some(to) = self.hierarchy_item(u, d) else {
+                continue;
+            };
+            out.push(CallHierarchyOutgoingCall {
+                to,
+                from_ranges: ranges
+                    .into_iter()
+                    .filter_map(|r| self.range_in(uri, r))
+                    .collect(),
+            });
+        }
+        json(out)
+    }
+
+    /// Byte range of a hierarchy item's body, recovered from its qualified name.
+    fn range_of_item(
+        &self,
+        item: &CallHierarchyItem,
+        f: &tcl_analysis::FileIndex,
+    ) -> Option<Range<usize>> {
+        f.defs
+            .iter()
+            .find(|d| d.qname == item.name)
+            .map(|d| d.full_range.clone())
+    }
+
+    /// A stand-in item for calls made at file scope, outside any proc.
+    fn file_scope_item(&self, uri: &str) -> Option<CallHierarchyItem> {
+        let zero = Range_ {
+            start: Position {
+                line: 0,
+                character: 0,
+            },
+            end: Position {
+                line: 0,
+                character: 0,
+            },
+        };
+        Some(CallHierarchyItem {
+            name: "<file scope>".to_string(),
+            kind: SymbolKind::FILE,
+            tags: None,
+            detail: None,
+            uri: parse_uri(uri)?,
+            range: zero,
+            selection_range: zero,
+            data: None,
+        })
+    }
+
     /// Parameter-name hints at call sites of user-defined procs.
     ///
     /// Not emitted for builtins: a man-page synopsis names arguments for a human
@@ -1440,6 +1629,27 @@ fn synopsis_parameters(label: &str) -> Vec<ParameterInformation> {
             documentation: None,
         })
         .collect()
+}
+
+/// The innermost proc, method, constructor or destructor containing `offset`.
+fn enclosing_def(symbols: &[Symbol], offset: usize) -> Option<&Symbol> {
+    let mut best: Option<&Symbol> = None;
+    fn rec<'a>(symbols: &'a [Symbol], offset: usize, best: &mut Option<&'a Symbol>) {
+        for s in symbols {
+            if !s.full_range.contains(&offset) {
+                continue;
+            }
+            if matches!(
+                s.kind,
+                TclKind::Proc | TclKind::Method | TclKind::Constructor | TclKind::Destructor
+            ) {
+                *best = Some(s);
+            }
+            rec(&s.children, offset, best);
+        }
+    }
+    rec(symbols, offset, &mut best);
+    best
 }
 
 /// The innermost namespace or class whose body contains `offset`.
