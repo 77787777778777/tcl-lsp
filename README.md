@@ -73,11 +73,16 @@ are never linked, so their licences do not affect this project.
 ## Building
 
 ```sh
-nix build              # the server, against Tcl/Tk 8.6
+nix build                  # the server, against Tcl/Tk 8.6
 nix build .#tcl-lsp-tcl9   # optional Tcl/Tk 9.0 variant
-nix flake check        # build + clippy + rustfmt + tests
-nix develop            # dev shell with rust, tcl 8.6, nagelfar, tclint
+nix build .#emacs-tcl-lsp  # the Emacs client, with the server's path baked in
+nix flake check            # build, clippy, rustfmt, unit + e2e tests, Emacs client
+nix develop                # dev shell with rust, tcl 8.6, nagelfar, tclint
 ```
+
+The flake also exports `overlays.default` (which fixes nagelfar's packaging) and
+`homeManagerModules.default` (best-effort — see
+[editors/emacs/README.md](editors/emacs/README.md#home-manager)).
 
 ## Editor setup
 
@@ -108,11 +113,30 @@ language-servers = ["tcl-lsp"]
 </details>
 
 <details>
-<summary>Emacs (eglot)</summary>
+<summary>Emacs (lsp-mode, or eglot)</summary>
+
+This repository ships a client: [`editors/emacs`](editors/emacs). With
+straight.el:
 
 ```elisp
-(add-to-list 'eglot-server-programs '(tcl-mode . ("tcl-lsp")))
+(use-package tcl-lsp
+  :straight (tcl-lsp :type git :host github :repo "pillowtrucker/tcl-lsp"
+                     :files ("editors/emacs/tcl-lsp.el"))
+  :after lsp-mode
+  :hook (tcl-mode . tcl-lsp-mode))
 ```
+
+and add `(tcl-mode . lsp-deferred)` to your lsp-mode hooks.
+
+It finds the server on `exec-path` first, so a direnv/envrc shell wins over
+anything installed globally, and falls back to a path baked in by the Nix
+build. `M-x tcl-lsp-which-server` reports which one it chose.
+
+See [editors/emacs/README.md](editors/emacs/README.md) for configuration, the
+keymap, and what eglot does and does not support. lsp-mode is the fuller
+experience by a wide margin: the eglot bundled with Emacs 30.2 sends no request
+for semantic tokens, code lens, call/type hierarchy, folding, selection ranges
+or document links, so those are unreachable there whatever the server offers.
 </details>
 
 <details>

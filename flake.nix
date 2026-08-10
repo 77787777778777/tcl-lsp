@@ -210,6 +210,41 @@
           tcl = pkgs.tcl-8_6;
           tk = pkgs.tk-8_6;
         };
+
+        # The Emacs client. The server's store path is substituted in as the
+        # *fallback*, so the package works with no configuration at all; the
+        # client still prefers whatever `tcl-lsp` a project's direnv environment
+        # puts on PATH, which is what makes a dev shell override this.
+        emacs-tcl-lsp = pkgs.emacsPackages.trivialBuild {
+          pname = "tcl-lsp";
+          version = (lib.importTOML ./Cargo.toml).workspace.package.version;
+          src = ./editors/emacs;
+
+          # lsp-mode is the only one needed to byte-compile cleanly. lsp-ui and
+          # eglot are loaded with `with-eval-after-load`, so they stay optional
+          # at runtime and are not required here.
+          packageRequires = [ pkgs.emacsPackages.lsp-mode ];
+
+          postPatch = ''
+            substituteInPlace tcl-lsp.el \
+              --replace-fail \
+                '(defconst tcl-lsp-bundled-server-path nil' \
+                '(defconst tcl-lsp-bundled-server-path "${lib.getExe tcl-lsp}"'
+          '';
+
+          # The test file drives a real server; it is exercised by `checks.emacs`,
+          # not shipped to users.
+          preBuild = "rm -f tcl-lsp-tests.el";
+
+          meta = {
+            description = "Emacs client for the tcl-lsp language server";
+            homepage = "https://github.com/pillowtrucker/tcl-lsp";
+            license = with lib.licenses; [
+              mit
+              asl20
+            ];
+          };
+        };
         tcl-lsp-tcl9 = mkTclLsp {
           tcl = pkgs.tcl-9_0;
           tk = pkgs.tk-9_0;
@@ -219,7 +254,13 @@
       {
         packages = {
           default = tcl-lsp;
-          inherit tcl-lsp tcl-lsp-tcl9 cmddb86 cmddb90;
+          inherit
+            tcl-lsp
+            tcl-lsp-tcl9
+            cmddb86
+            cmddb90
+            emacs-tcl-lsp
+            ;
           inherit (pkgs) nagelfar-full;
         };
 
@@ -253,6 +294,12 @@
             rustToolchain
             pkgs.rust-analyzer
             pkgs.cargo-watch
+            # The server itself, so a direnv-enabled editor opening this repo
+            # finds `tcl-lsp` on PATH and the client's discovery path is
+            # exercised the same way a user's would be. Note this is the *built*
+            # server, not your working tree: while hacking on the Rust, point
+            # the editor at ./target/debug/tcl-lsp instead.
+            tcl-lsp
             # The Tcl side: a runtime to test against, plus the external analysers.
             pkgs.tcl-8_6
             pkgs.tk-8_6
@@ -343,21 +390,131 @@
           # The committed command database must match what the pinned Tcl/Tk man
           # pages actually say. Without this, a nixpkgs bump silently leaves the
           # server documenting a version it no longer builds against.
-          cmddb-current =
-            pkgs.runCommand "tcl-cmddb-current" { }
+          cmddb-current = pkgs.runCommand "tcl-cmddb-current" { } ''
+            if ! diff -q ${cmddb86}/tcl86.json ${./crates/tcl-analysis/data/tcl86.json}; then
+              echo "FAIL: crates/tcl-analysis/data/tcl86.json is stale."
+              echo "Run: nix run .#regen-cmddb"
+              exit 1
+            fi
+            if ! diff -q ${cmddb90}/tcl90.json ${./crates/tcl-analysis/data/tcl90.json}; then
+              echo "FAIL: crates/tcl-analysis/data/tcl90.json is stale."
+              echo "Run: nix run .#regen-cmddb"
+              exit 1
+            fi
+            touch $out
+          '';
+
+          # The Emacs client: byte-compiled with warnings fatal, checkdoc'd, and
+          # driven against the real server. lsp-mode is present so its half of
+          # the suite runs rather than skipping.
+          emacs =
+            let
+              emacsWithDeps = pkgs.emacs.pkgs.withPackages (epkgs: [
+                epkgs.lsp-mode
+                epkgs.lsp-ui
+              ]);
+            in
+            pkgs.runCommand "tcl-lsp-emacs-check"
+              {
+                nativeBuildInputs = [
+                  emacsWithDeps
+                  tcl-lsp
+                ];
+              }
               ''
-                if ! diff -q ${cmddb86}/tcl86.json ${./crates/tcl-analysis/data/tcl86.json}; then
-                  echo "FAIL: crates/tcl-analysis/data/tcl86.json is stale."
-                  echo "Run: nix run .#regen-cmddb"
-                  exit 1
-                fi
-                if ! diff -q ${cmddb90}/tcl90.json ${./crates/tcl-analysis/data/tcl90.json}; then
-                  echo "FAIL: crates/tcl-analysis/data/tcl90.json is stale."
-                  echo "Run: nix run .#regen-cmddb"
+                export HOME=$TMPDIR
+                cp ${./editors/emacs}/*.el .
+                chmod u+w ./*.el
+
+                echo "--- byte-compile (warnings are errors) ---"
+                emacs -Q --batch -L . \
+                  --eval '(setq byte-compile-error-on-warn t)' \
+                  -f batch-byte-compile tcl-lsp.el
+
+                echo "--- checkdoc ---"
+                # `checkdoc-file' reports through `warn' and still exits 0, so
+                # the flag it sets is what has to be tested.
+                emacs -Q --batch -L . --eval '
+                  (progn
+                    (require (quote checkdoc))
+                    (checkdoc-file "tcl-lsp.el")
+                    (checkdoc-file "tcl-lsp-tests.el")
+                    (when checkdoc-pending-errors (kill-emacs 1)))'
+
+                echo "--- ert ---"
+                emacs -Q --batch -L . -l tcl-lsp-tests.el \
+                  -f ert-run-tests-batch-and-exit 2>&1 | tee ert.log
+
+                # A skipped integration test would silently hide a broken client,
+                # so require that the ones needing a server and lsp-mode ran.
+                grep -q "0 unexpected" ert.log
+                if grep -qE "SKIPPED +tcl-lsp-test-(server-starts|lsp-client)" ert.log; then
+                  echo "FAIL: a test that must run was skipped"
                   exit 1
                 fi
                 touch $out
               '';
+
+          # The home-manager module, evaluated against a stub of the two
+          # home-manager options it touches. This cannot prove an activation
+          # works, but it does catch the ways an unused module rots: a renamed
+          # package attribute, a type error, or `enable` failing to gate.
+          # Stubbing beats adding a home-manager flake input for one module.
+          hm-module =
+            let
+              stub =
+                { lib, ... }:
+                {
+                  options = {
+                    home.packages = lib.mkOption {
+                      type = lib.types.listOf lib.types.package;
+                      default = [ ];
+                    };
+                    programs.emacs.enable = lib.mkEnableOption "emacs";
+                    programs.emacs.extraPackages = lib.mkOption {
+                      type = lib.types.functionTo (lib.types.listOf lib.types.package);
+                      default = _: [ ];
+                    };
+                  };
+                };
+              evalHm =
+                extra:
+                (lib.evalModules {
+                  modules = [
+                    stub
+                    self.homeManagerModules.default
+                    { _module.args.pkgs = pkgs; }
+                    extra
+                  ];
+                }).config;
+              paths = map (p: p.outPath);
+
+              disabled = evalHm { programs.tcl-lsp.enable = false; };
+              withEmacs = evalHm {
+                programs.tcl-lsp.enable = true;
+                programs.emacs.enable = true;
+              };
+              # `emacs.enable` defaults to `programs.emacs.enable`, so this also
+              # tests that the default is wired to the right option.
+              withoutEmacs = evalHm {
+                programs.tcl-lsp.enable = true;
+                programs.emacs.enable = false;
+              };
+            in
+            assert lib.assertMsg (disabled.home.packages == [ ]) "hm module installs the server when disabled";
+            assert lib.assertMsg (
+              paths withEmacs.home.packages == paths [ tcl-lsp ]
+            ) "hm module does not install the server when enabled";
+            assert lib.assertMsg (
+              paths (withEmacs.programs.emacs.extraPackages pkgs.emacsPackages) == paths [
+                emacs-tcl-lsp
+                pkgs.emacsPackages.lsp-mode
+              ]
+            ) "hm module does not install the Emacs client alongside lsp-mode";
+            assert lib.assertMsg (
+              withoutEmacs.programs.emacs.extraPackages pkgs.emacsPackages == [ ]
+            ) "hm module installs the Emacs client without Emacs";
+            pkgs.runCommand "tcl-lsp-hm-module" { } "touch $out";
 
           # nagelfar is useless without its databases; assert the overlay fixed it.
           nagelfar-usable =
@@ -385,5 +542,63 @@
     )
     // {
       overlays.default = nagelfarOverlay;
+
+      # Best-effort, and flagged as such in the README: the author does not use
+      # home-manager, so this is verified to *evaluate* (`checks.hm-module`) but
+      # has never been run in a real activation.
+      #
+      # There is deliberately no `epkgs.tcl-lsp` overlay attribute to go with
+      # this. An overlay entry would have to build the Emacs client against the
+      # consumer's nixpkgs, and the client bakes in a `tcl-lsp` store path — so
+      # it would silently bake in a *different* server build than this flake
+      # pins. Referring to `packages.emacs-tcl-lsp` keeps the two in step.
+      homeManagerModules.default =
+        {
+          config,
+          lib,
+          pkgs,
+          ...
+        }:
+        let
+          cfg = config.programs.tcl-lsp;
+          ours = self.packages.${pkgs.stdenv.hostPlatform.system};
+        in
+        {
+          options.programs.tcl-lsp = {
+            enable = lib.mkEnableOption "the tcl-lsp language server for Tcl and Tk";
+
+            package = lib.mkOption {
+              type = lib.types.package;
+              default = ours.tcl-lsp;
+              defaultText = lib.literalExpression "tcl-lsp.packages.\${system}.tcl-lsp";
+              description = ''
+                The server. Set to `tcl-lsp-tcl9` to link against Tcl/Tk 9.0.
+                Note this selects the *runtime* only; which command set your code
+                is analysed against is the `tclVersion` setting, independently.
+              '';
+            };
+
+            emacs.enable = lib.mkOption {
+              type = lib.types.bool;
+              default = config.programs.emacs.enable;
+              defaultText = lib.literalExpression "config.programs.emacs.enable";
+              description = ''
+                Install the Emacs client into `programs.emacs.extraPackages`,
+                along with lsp-mode. The client prefers a `tcl-lsp` found on
+                `exec-path` — so a project's direnv environment still wins — and
+                falls back to {option}`programs.tcl-lsp.package`.
+              '';
+            };
+          };
+
+          config = lib.mkIf cfg.enable {
+            home.packages = [ cfg.package ];
+
+            programs.emacs.extraPackages = lib.mkIf cfg.emacs.enable (epkgs: [
+              ours.emacs-tcl-lsp
+              epkgs.lsp-mode
+            ]);
+          };
+        };
     };
 }
