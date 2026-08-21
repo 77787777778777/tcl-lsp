@@ -6,10 +6,10 @@
     # once Hydra's blocking jobset has passed, so their build outputs are in the
     # binary cache; `master` is the integration branch and routinely leaves you
     # compiling LLVM and rustc locally.
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    utils.url = "github:numtide/flake-utils";
+    nixpkgs.url = "github:NixOS/nixpkgs?rev=f13ff45afd1bb73e640eaa08a7066dbed07e3238";
+    utils.url = "github:numtide/flake-utils?rev=11707dc2f618dd54ca8739b309ec4fc024de578b";
     fenix = {
-      url = "github:nix-community/fenix";
+      url = "github:nix-community/fenix?rev=36ef6893e18fb070e33a1d17cd5296382c9519d4";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
