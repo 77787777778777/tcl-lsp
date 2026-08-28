@@ -190,12 +190,32 @@ pub(crate) fn literal(script: &Script, word: &[Token]) -> Option<String> {
 }
 
 /// The byte range of a word's *contents*, i.e. inside any braces or quotes.
-pub(crate) fn body_range(word: &[Token]) -> Option<Range<usize>> {
+///
+/// Braced bodies come back from Tcl as ONE head token (Word/SimpleWord/
+/// ExpandWord) whose sub-token stream is whatever Tcl needed to express its
+/// contents. When the body contains backslash-processed sequences — a
+/// `\`-newline continuation, an escaped brace — those surface as Backslash
+/// children SPLITTING the Text, so "the first sub-token's range" is only the
+/// head chunk. That truncated range made every braced body containing a line
+/// continuation re-parse as "unterminated", costing a false warning per
+/// body. The interior is the head token minus its outer braces: read the
+/// bytes instead of trusting child-token boundaries. (Empty bodies yield an
+/// empty range.)
+pub(crate) fn body_range(script: &Script, word: &[Token]) -> Option<Range<usize>> {
     let head = word.first()?;
     match head.kind {
-        // `{...}` and `"..."` produce a head token spanning the delimiters and a
-        // single TEXT component spanning just the interior.
-        TokenKind::SimpleWord | TokenKind::Word => word.get(1).map(|t| t.range()),
+        TokenKind::SimpleWord | TokenKind::Word | TokenKind::ExpandWord => {
+            let r = head.range();
+            // A braced word starts with `{` (`{*` for expansion); anything else
+            // (a quoted word can't appear here, but do not guess) keeps the
+            // exact pre-fix behaviour.
+            if script.as_bytes().get(r.start) != Some(&b'{') {
+                return word.get(1).map(|t| t.range());
+            }
+            let start = r.start + 1;
+            let end = r.end.checked_sub(1)?;
+            Some(start..end)
+        }
         TokenKind::Text => Some(head.range()),
         _ => None,
     }
@@ -420,7 +440,7 @@ impl Walker<'_> {
                 (Mode::ClassBody(_), "method") => {
                     if let Some(mut sym) = self.simple_def(&cmd, &words, ns, SymbolKind::Method) {
                         sym.detail = words.get(2).and_then(|w| literal(self.script, w));
-                        if let Some(body) = words.get(3).and_then(|w| body_range(w)) {
+                        if let Some(body) = words.get(3).and_then(|w| body_range(self.script, w)) {
                             self.bind_params(&words, 2, body.clone());
                             let mut kids = Vec::new();
                             self.walk(body.clone(), ns, Mode::Script, body, &mut kids);
@@ -431,7 +451,7 @@ impl Walker<'_> {
                 }
                 (Mode::ClassBody(_), "constructor") => {
                     let mut sym = self.anon_def(&cmd, ns, "constructor", SymbolKind::Constructor);
-                    if let Some(body) = words.get(2).and_then(|w| body_range(w)) {
+                    if let Some(body) = words.get(2).and_then(|w| body_range(self.script, w)) {
                         self.bind_params(&words, 1, body.clone());
                         self.walk(body.clone(), ns, Mode::Script, body, &mut sym.children);
                     }
@@ -439,7 +459,7 @@ impl Walker<'_> {
                 }
                 (Mode::ClassBody(_), "destructor") => {
                     let mut sym = self.anon_def(&cmd, ns, "destructor", SymbolKind::Destructor);
-                    if let Some(body) = words.get(1).and_then(|w| body_range(w)) {
+                    if let Some(body) = words.get(1).and_then(|w| body_range(self.script, w)) {
                         self.walk(body.clone(), ns, Mode::Script, body, &mut sym.children);
                     }
                     into.push(sym);
@@ -451,7 +471,7 @@ impl Walker<'_> {
                 (Mode::ClassBody(_), "typemethod" | "proc") => {
                     if let Some(mut sym) = self.simple_def(&cmd, &words, ns, SymbolKind::Method) {
                         sym.detail = words.get(2).and_then(|w| literal(self.script, w));
-                        if let Some(body) = words.get(3).and_then(|w| body_range(w)) {
+                        if let Some(body) = words.get(3).and_then(|w| body_range(self.script, w)) {
                             self.bind_params(&words, 2, body.clone());
                             let mut kids = Vec::new();
                             self.walk(body.clone(), ns, Mode::Script, body, &mut kids);
@@ -552,7 +572,7 @@ impl Walker<'_> {
                         .iter()
                         .skip(2)
                         .rfind(|w| is_braced(self.script, w))
-                        .and_then(|w| body_range(w))
+                        .and_then(|w| body_range(self.script, w))
                     {
                         let mut kids = Vec::new();
                         self.walk(body, ns, Mode::Script, scope.clone(), &mut kids);
@@ -606,7 +626,7 @@ impl Walker<'_> {
                         if !is_braced(self.script, w) {
                             continue;
                         }
-                        if let Some(body) = body_range(w) {
+                        if let Some(body) = body_range(self.script, w) {
                             let mut kids = Vec::new();
                             self.walk(body, ns, Mode::Script, scope.clone(), &mut kids);
                             into.append(&mut kids);
@@ -667,7 +687,7 @@ impl Walker<'_> {
             return;
         };
         sym.detail = words.get(2).and_then(|w| literal(self.script, w));
-        if let Some(body) = words.get(3).and_then(|w| body_range(w)) {
+        if let Some(body) = words.get(3).and_then(|w| body_range(self.script, w)) {
             // `proc a::b::c` defines into `::a::b`, so the body's enclosing namespace
             // is the name's qualifier, not the surrounding scope.
             let proc_name = literal(self.script, words[1]).unwrap_or_default();
@@ -714,7 +734,7 @@ impl Walker<'_> {
             doc: doc_of(self.script, cmd),
             children: Vec::new(),
         };
-        if let Some(body) = words.get(3).and_then(|w| body_range(w)) {
+        if let Some(body) = words.get(3).and_then(|w| body_range(self.script, w)) {
             let mut kids = Vec::new();
             self.walk(body.clone(), &qname, Mode::Script, body, &mut kids);
             sym.children = kids;
@@ -777,7 +797,7 @@ impl Walker<'_> {
             doc: doc_of(self.script, cmd),
             children: Vec::new(),
         };
-        if let Some(body) = words.get(body_at).and_then(|w| body_range(w)) {
+        if let Some(body) = words.get(body_at).and_then(|w| body_range(self.script, w)) {
             let mut kids = Vec::new();
             let outer_supers = std::mem::take(&mut self.pending_supers);
             self.walk(
@@ -1350,5 +1370,21 @@ mod tests {
         let o = parse("while {1} { set x 1 }\n");
         assert!(qnames(&o).is_empty());
         assert!(o.variables.iter().any(|v| v.name == "x"));
+    }
+
+    #[test]
+    fn braced_bodies_with_line_continuations_walk_fully() {
+        // THE false-positive bug: a braced body whose interior contains
+        // backslash-sequences (`\`-newline continuations) tokenizes as
+        // [Word [Text][Backslash][Text]...]. body_range used to return the
+        // FIRST Text child's range, truncating the body at the first
+        // continuation, so every following re-parse ended mid-bracket and
+        // reported "unterminated command". The interior is the head token
+        // minus its braces — parse it whole.
+        let o = parse(
+            "proc case_a {} {\n    _collapsible $w k [dict create \\\n        a 1 \\\n        b 2]\n    proc inner {} { puts hi }\n}\n",
+        );
+        assert!(o.errors.is_empty(), "no synthetic errors: {:?}", o.errors);
+        assert_eq!(qnames(&o), vec!["::case_a", "::inner"]);
     }
 }

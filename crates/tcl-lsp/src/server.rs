@@ -35,6 +35,9 @@ pub struct Server {
     kb: kb::Kb,
     config: Config,
     encoding: PositionEncoding,
+    /// Project syntax database (nagelfar `-header` of the workspace's Tcl
+    /// files), layered under the builtin db so cross-file procs resolve.
+    project_db: Option<String>,
 }
 
 pub fn run(connection: &Connection) -> Result<()> {
@@ -91,12 +94,32 @@ pub fn run(connection: &Connection) -> Result<()> {
         config.tcl_version
     );
 
+    // Index the workspace up front so definition and references work in files the
+    // user has not opened yet. The same file list builds the project syntax
+    // database that nags nagelfar out of its "unknown command" noise.
+    let files = collect_tcl_files(&roots);
+    let project_db = match config.nagelfar.active() {
+        Some(exe) => {
+            let dir = std::env::temp_dir().join(format!("tcl-lsp-db-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).ok();
+            let db = dir.join("project.db");
+            if external::build_header_db(exe, &files, &db) {
+                eprintln!("project syntax db: {} file(s) indexed", files.len());
+                Some(db.to_string_lossy().to_string())
+            } else {
+                eprintln!("project syntax db build failed — builtin db only");
+                None
+            }
+        }
+        None => None,
+    };
     let mut server = Server {
         docs: HashMap::new(),
         index: Index::new(),
         kb,
         config,
         encoding,
+        project_db,
     };
 
     // Index the workspace up front so definition and references work in files the
@@ -126,6 +149,50 @@ fn workspace_roots(params: &InitializeParams) -> Vec<std::path::PathBuf> {
             }
         }
     }
+    out
+}
+
+/// Every Tcl file under the workspace roots, for cross-file linting. The
+/// walk is the server's only broadcast: nagelfar gets these as input
+/// siblings, definitions from them resolving "unknown command" noise.
+/// Bounded on BOTH axes so a hostile repository cannot make the lint pass
+/// O(n²) in a degenerate tree: file count AND total bytes.
+fn collect_tcl_files(roots: &[std::path::PathBuf]) -> Vec<std::path::PathBuf> {
+    const MAX_FILES: usize = 400;
+    const MAX_BYTES: u64 = 16 * 1024 * 1024;
+    let mut out = Vec::new();
+    let mut bytes = 0u64;
+    let mut stack: Vec<std::path::PathBuf> = roots.to_vec();
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                let name = p.file_name().map(|n| n.to_string_lossy().to_string());
+                let name = name.as_deref().unwrap_or("");
+                if name == "target"
+                    || name == ".git"
+                    || name == "vendor"
+                    || name == "node_modules"
+                    || name.starts_with("result")
+                {
+                    continue;
+                }
+                stack.push(p);
+            } else if p.extension().is_some_and(|e| e == "tcl") {
+                if out.len() >= MAX_FILES || bytes >= MAX_BYTES {
+                    continue;
+                }
+                if let Ok(meta) = std::fs::metadata(&p) {
+                    bytes += meta.len();
+                }
+                out.push(p);
+            }
+        }
+    }
+    out.sort();
     out
 }
 
@@ -411,11 +478,14 @@ impl Server {
             let li = doc.line_index();
             let mut findings = Vec::new();
             if let Some(exe) = self.config.nagelfar.active() {
-                findings.extend(external::nagelfar(
-                    doc.text(),
-                    exe,
-                    self.config.nagelfar_db.as_deref(),
-                ));
+                let mut dbs: Vec<String> = Vec::new();
+                if let Some(db) = &self.config.nagelfar_db {
+                    dbs.push(db.clone());
+                }
+                if let Some(p) = &self.project_db {
+                    dbs.push(p.clone());
+                }
+                findings.extend(external::nagelfar(doc.text(), exe, &dbs));
             }
             if let Some(exe) = self.config.tclint.active() {
                 findings.extend(external::tclint(doc.text(), exe));

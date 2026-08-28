@@ -72,13 +72,19 @@ fn run(exe: &str, args: &[&std::ffi::OsStr]) -> Option<String> {
 /// Output with `-H` is `<file>: <line>: <S> <message>`, where `<S>` is `E`, `W` or
 /// `N`. Some messages continue onto unprefixed following lines; those are folded
 /// into the preceding finding rather than dropped.
-pub fn nagelfar(source: &str, exe: &str, db: Option<&str>) -> Vec<Finding> {
+///
+/// `dbs` are syntax databases layered with `-s` (repeatable): the builtin Tcl/Tk
+/// one FIRST, then a project database built from the workspace's files with
+/// `nagelfar -header`. The project database is what kills "Unknown command" for
+/// procs defined in sibling files — nagelfar does NOT resolve those from bare
+/// file arguments, only from databases.
+pub fn nagelfar(source: &str, exe: &str, dbs: &[String]) -> Vec<Finding> {
     let Some(scratch) = Scratch::new(source, "nagelfar") else {
         return Vec::new();
     };
 
     let mut args: Vec<&std::ffi::OsStr> = vec!["-H".as_ref()];
-    if let Some(db) = db {
+    for db in dbs {
         args.push("-s".as_ref());
         args.push(db.as_ref());
     }
@@ -111,6 +117,26 @@ pub fn nagelfar(source: &str, exe: &str, db: Option<&str>) -> Vec<Finding> {
         }
     }
     out
+}
+
+/// Builds a nagelfar syntax database from the given files (`nagelfar -header`),
+/// returned as the db path on success. This is the ONE place project cross-file
+/// definitions become visible to the linter. Bounded by the caller's file caps;
+/// a header build is one subprocess that finishes in a second or two for any
+/// realistic project.
+pub fn build_header_db(exe: &str, files: &[std::path::PathBuf], out_path: &std::path::Path) -> bool {
+    if files.is_empty() {
+        return false;
+    }
+    let mut cmd = Command::new(exe);
+    cmd.arg("-header")
+        .arg(out_path)
+        .args(files)
+        .stdin(Stdio::null());
+    match cmd.output() {
+        Ok(o) => o.status.success() && out_path.metadata().map(|m| m.len() > 0).unwrap_or(false),
+        Err(_) => false,
+    }
 }
 
 fn parse_nagelfar_line(line: &str) -> Option<Finding> {
