@@ -71,6 +71,8 @@ pub fn tokens(
             // distinction that actually helps a reader.
             RefKind::Command if builtin(&r.name) => T_KEYWORD,
             RefKind::Command => T_FUNCTION,
+            // `$w.bla.bla insert` — the dispatch word reads like a method.
+            RefKind::WidgetCommand => T_METHOD,
         };
         raw.push(Raw {
             range: r.range.clone(),

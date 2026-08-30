@@ -124,7 +124,11 @@ pub fn nagelfar(source: &str, exe: &str, dbs: &[String]) -> Vec<Finding> {
 /// definitions become visible to the linter. Bounded by the caller's file caps;
 /// a header build is one subprocess that finishes in a second or two for any
 /// realistic project.
-pub fn build_header_db(exe: &str, files: &[std::path::PathBuf], out_path: &std::path::Path) -> bool {
+pub fn build_header_db(
+    exe: &str,
+    files: &[std::path::PathBuf],
+    out_path: &std::path::Path,
+) -> bool {
     if files.is_empty() {
         return false;
     }

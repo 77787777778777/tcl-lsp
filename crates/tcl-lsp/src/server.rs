@@ -846,6 +846,21 @@ impl Server {
         else {
             return serde_json::Value::Null;
         };
+        // A widget-path dispatch (`$w.bla.bla insert end x`) has no static
+        // definition — the widget command is built at runtime — but the
+        // subcommand word still deserves a hover. Say what is known: it is a
+        // widget command, on which path, and which of the classic Tk widget
+        // families document this subcommand.
+        if let Some(md) = self.widget_command_hover(&uri, p.text_document_position_params.position)
+        {
+            return json(Hover {
+                contents: HoverContents::Markup(MarkupContent {
+                    kind: MarkupKind::Markdown,
+                    value: md,
+                }),
+                range: None,
+            });
+        }
         let hits = self.index.resolve(&word, &ns);
         let md = match hits.first() {
             // A definition in the user's own code wins over a builtin of the same
@@ -871,6 +886,39 @@ impl Server {
             }),
             range: None,
         })
+    }
+
+    /// Hover content for the subcommand word of a dynamic-head command
+    /// (`$w.path insert end x` with the cursor on `insert`), or `None` when
+    /// the position is not such a word.
+    fn widget_command_hover(&self, uri: &str, pos: Position) -> Option<String> {
+        let doc = self.docs.get(uri)?;
+        let offset = doc.line_index().offset(to_linepos(pos), self.encoding);
+        let text = doc.text();
+        // The enclosing command tells us whether the head is dynamic and which
+        // word the cursor is on. `Enclosing.name` is None exactly when the
+        // command word involves substitution.
+        let enclosing = tcl_syntax::command_at(&tcl_syntax::Script::new(text), offset)?;
+        if enclosing.name.is_some() {
+            return None; // statically named command: the normal path handles it
+        }
+        if enclosing.word_index != 1 {
+            return None; // hover only makes sense on the dispatch word itself
+        }
+        let sub = word_at(text, offset)?;
+        let head_span = enclosing.command.words().first().and_then(|w| {
+            w.first()
+                .map(|t| t.range().start)
+                .zip(w.last().map(|t| t.range().end))
+        });
+        let head = head_span
+            .and_then(|(s, e)| text.get(s..e).map(|s| s.to_string()))
+            .unwrap_or_default();
+        Some(format!(
+            "**Widget command** `{sub}` dispatched on `{head}`.\n\nThe path is built at runtime, so the widget family (and thus the exact man \
+             page) is not statically known. `configure`/`cget`/`insert`/`delete`/`tag`/… are \
+             shared across Tk widgets; which options exist depends on the widget."
+        ))
     }
 
     fn completion(&self, p: &CompletionParams) -> serde_json::Value {

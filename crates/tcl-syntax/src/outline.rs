@@ -46,6 +46,11 @@ pub enum RefKind {
     Command,
     /// A `$name` substitution.
     Variable,
+    /// The subcommand word of a dynamic-head dispatch, as in
+    /// `$w.bla.bla.bla insert end x` — `insert` here. There is no static
+    /// definition for it (the widget's command is built at runtime), but
+    /// hover and highlight can still say something useful.
+    WidgetCommand,
 }
 
 /// A use site, as opposed to a definition.
@@ -189,7 +194,13 @@ pub(crate) fn literal(script: &Script, word: &[Token]) -> Option<String> {
     }
 }
 
-/// The byte range of a word's *contents*, i.e. inside any braces or quotes.
+/// Whether every byte of `s` is a plain Tcl bare-word character (letters,
+/// digits, `_`, `.`). Used to accept widget subcommand words like `insert`
+/// or `.log.fast` while rejecting garbage such as quotes or brackets.
+fn is_bare_word_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_' || b == b'.'
+}
+
 ///
 /// Braced bodies come back from Tcl as ONE head token (Word/SimpleWord/
 /// ExpandWord) whose sub-token stream is whatever Tcl needed to express its
@@ -379,9 +390,54 @@ impl Walker<'_> {
             }
 
             let words = cmd.words();
-            let Some(head) = words.first().and_then(|w| literal(self.script, w)) else {
-                continue; // dynamically-named command; nothing statically knowable
-            };
+            // A command whose head is not a literal — `$w.bla.bla insert end x`,
+            // `[$gen next] configure ...` — is still worth recording: the first
+            // ARGUMENT of a widget-path dispatch is usually the widget
+            // subcommand (`insert`, `configure`, ...), and hover/definition on
+            // that word is exactly what a Tcl editor is asked for. Recorded as
+            // a `WidgetCommand` ref whose range covers the subcommand word;
+            // the dynamic head itself gets a `DynamicHead` ref so document
+            // highlight still matches it.
+            if words
+                .first()
+                .and_then(|w| literal(self.script, w))
+                .is_none()
+            {
+                // The head word may still be a plain variable use: record it.
+                if let Some(head_words) = words.first() {
+                    if let Some(r) = word_range(head_words) {
+                        self.refs.push(Ref {
+                            kind: RefKind::Variable,
+                            name: self.script.text(r.clone()).unwrap_or_default().to_string(),
+                            range: r,
+                            namespace: ns.to_string(),
+                        });
+                    }
+                }
+                if let Some(sub) = words.get(1).and_then(|w| word_range(w)) {
+                    // The dispatch word must itself be a literal bare word.
+                    // `[$gen next]` as the second word of `$w [...]` involves
+                    // substitution, so its text can be anything — reject it.
+                    if words.get(1).and_then(|w| literal(self.script, w)).is_none() {
+                        continue;
+                    }
+                    let name = self
+                        .script
+                        .text(sub.clone())
+                        .unwrap_or_default()
+                        .to_string();
+                    if !name.is_empty() && name.bytes().all(is_bare_word_byte) {
+                        self.refs.push(Ref {
+                            kind: RefKind::WidgetCommand,
+                            name,
+                            range: sub,
+                            namespace: ns.to_string(),
+                        });
+                    }
+                }
+                continue;
+            }
+            let head = words.first().and_then(|w| literal(self.script, w)).unwrap();
 
             // Record the command itself as a reference, so find-references and
             // call hierarchy have use sites to work from.
@@ -1152,6 +1208,44 @@ mod tests {
     fn skips_dynamically_named_definitions() {
         let o = parse("proc [genName] {} {}\nproc real {} {}\n");
         assert_eq!(qnames(&o), vec!["::real"]);
+    }
+
+    #[test]
+    fn widget_dispatch_records_its_subcommand() {
+        // `$w.bla.bla.bla insert end x`: the head is dynamic so no definition
+        // can exist, but the dispatch word `insert` is recorded so hover can
+        // explain it and highlight can paint it like a method.
+        let o = parse("set w .top\n$w.bla.bla.bla insert end x\n$w configure -bg black\n");
+        let subs: Vec<&str> = o
+            .refs
+            .iter()
+            .filter(|r| r.kind == RefKind::WidgetCommand)
+            .map(|r| r.name.as_str())
+            .collect();
+        assert_eq!(subs, vec!["insert", "configure"]);
+        // The ranges land on the subcommand words, not on the `$w` head.
+        let text = "set w .top\n$w.bla.bla.bla insert end x\n$w configure -bg black\n";
+        let first = o
+            .refs
+            .iter()
+            .find(|r| r.kind == RefKind::WidgetCommand)
+            .unwrap();
+        assert_eq!(&text[first.range.clone()], "insert");
+    }
+
+    #[test]
+    fn widget_dispatch_covers_object_handles_too() {
+        // `[$gen next]` descends into the bracket as its own command:
+        // `$gen` is a dynamic head and `next` a literal dispatch word —
+        // the TclOO `$obj method` shape. Same treatment as widgets.
+        let o = parse("$w [$gen next] x\n");
+        let subs: Vec<&str> = o
+            .refs
+            .iter()
+            .filter(|r| r.kind == RefKind::WidgetCommand)
+            .map(|r| r.name.as_str())
+            .collect();
+        assert_eq!(subs, vec!["next"]);
     }
 
     #[test]
