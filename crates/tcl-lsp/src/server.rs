@@ -892,8 +892,11 @@ impl Server {
                 }
                 md
             }
-            None => match self.kb.get(&word) {
-                Some(builtin) => builtin.hover_markdown(),
+            None => match self
+                .ensemble_subcommand_hover(&uri, p.text_document_position_params.position, &word)
+                .or_else(|| self.kb.get(&word).map(|b| b.hover_markdown()))
+            {
+                Some(md) => md,
                 None => return serde_json::Value::Null,
             },
         };
@@ -904,6 +907,45 @@ impl Server {
             }),
             range: None,
         })
+    }
+
+    /// Hover content for the subcommand word of an ensemble builtin —
+    /// `string match`, `dict get`, `file tail` — where the cursor sits on
+    /// the second word. `word_at` yields `match`, which is not itself a
+    /// command, so the plain kb lookup misses; this re-reads the enclosing
+    /// command, finds the head's page, and shows that subcommand's entry:
+    /// its own signature and the prose of its `.TP` block.
+    fn ensemble_subcommand_hover(&self, uri: &str, pos: Position, word: &str) -> Option<String> {
+        let doc = self.docs.get(uri)?;
+        let offset = doc.line_index().offset(to_linepos(pos), self.encoding);
+        let text = doc.text();
+        let enclosing = tcl_syntax::command_at(&tcl_syntax::Script::new(text), offset)?;
+        // Word 1 of the command, head is word 0.
+        if enclosing.word_index != 1 {
+            return None;
+        }
+        let head = enclosing.name?;
+        let cmd = self.kb.get(&head)?;
+        // Ensembles accept unambiguous abbreviations (`string mat`), so the
+        // cursor word may be a prefix: use it only when exactly one
+        // subcommand starts with it.
+        let exact = cmd.subcommands.iter().find(|s| s.name == word);
+        let mut candidates = cmd
+            .subcommands
+            .iter()
+            .filter(|s| !word.is_empty() && s.name.starts_with(word));
+        let sub = match (exact, candidates.next(), candidates.next()) {
+            (Some(s), _, _) => Some(s),
+            (None, Some(one), None) => Some(one),
+            _ => None,
+        }?;
+        let mut md = format!("```tcl\n{}\n```\n", sub.signature);
+        if !sub.doc.is_empty() {
+            md.push('\n');
+            md.push_str(&sub.doc);
+            md.push('\n');
+        }
+        Some(md)
     }
 
     /// Hover content for the subcommand word of a dynamic-head command
@@ -1018,63 +1060,90 @@ impl Server {
             lower.contains(short) || short.starts_with(&lower) && lower.len() >= 2
         });
 
-        // Which families document this subcommand at all? Their synopses
-        // carry `pathName <sub> ...` rows from the man pages.
+        // Which families document this subcommand at all? Their SYNOPSIS
+        // rows and `.TP` entries carry `pathName <sub> ...` from the man
+        // pages. Group form (`tag option`) and its nested forms
+        // (`tag add`, `tag bind`, …) share the word and all belong.
         let mut documenting: Vec<&str> = Vec::new();
-        let mut signature: Option<String> = None;
-        let mut doc_text: Option<String> = None;
+        let mut entries: Vec<(String, String)> = Vec::new(); // (signature, doc)
+        let mut page_description: Option<String> = None;
         for w in WIDGETS {
             let Some(cmd) = self.kb.get(w) else {
                 continue;
             };
-            // Widget subcommands come from two shapes the man pages use:
-            //   SYNOPSIS rows: `pathname insert index window ?options...?`
-            //   documented subcommand entries (`subcommands` from .TP rows)
+            let tps: Vec<&kb::Subcommand> =
+                cmd.subcommands.iter().filter(|s| s.name == sub).collect();
             let syn = cmd
                 .synopsis
                 .iter()
                 .find(|s| s.split_whitespace().nth(1) == Some(sub));
-            let sub_doc = cmd.subcommands.iter().find(|s| s.name == sub);
-            if syn.is_none() && sub_doc.is_none() {
+            if tps.is_empty() && syn.is_none() {
                 continue;
             }
             documenting.push(w);
             let head_is_this = family_guess == Some(w);
-            if signature.is_none() || head_is_this {
-                // The subcommand's own .TP entry (signature + prose) is the
-                // real documentation; the SYNOPSIS row is the fallback.
-                if let Some(sd) = sub_doc {
-                    signature = Some(sd.signature.clone());
-                    if !sd.doc.is_empty() {
-                        doc_text = Some(sd.doc.clone());
-                    } else if doc_text.is_none() && !cmd.description.is_empty() {
-                        doc_text = Some(cmd.description.clone());
+            if !head_is_this {
+                continue;
+            }
+            // The guessed family is the answer; show every form it has.
+            for s in &tps {
+                entries.push((s.signature.clone(), s.doc.clone()));
+            }
+            if entries.is_empty() {
+                if let Some(s) = syn {
+                    entries.push((s.clone(), String::new()));
+                }
+            }
+            if !cmd.description.is_empty() {
+                page_description = Some(cmd.description.clone());
+            }
+        }
+        // No family named: show one entry per DISTINCT form. `configure` is
+        // spelled the same on 18 pages (their option sets differ — the pages
+        // say which); `insert` genuinely differs per widget, and each variant
+        // earns its line.
+        let mut fallback_entries: Vec<(String, String)> = Vec::new();
+        if entries.is_empty() {
+            for w in WIDGETS {
+                if family_guess == Some(w) {
+                    continue;
+                }
+                let Some(cmd) = self.kb.get(w) else {
+                    continue;
+                };
+                for s in cmd.subcommands.iter().filter(|s| s.name == sub) {
+                    let sig = s.signature.clone();
+                    if !fallback_entries.iter().any(|(e, _)| e == &sig) {
+                        fallback_entries.push((sig, s.doc.clone()));
                     }
-                } else {
-                    signature = syn.cloned();
-                    if doc_text.is_none() && !cmd.description.is_empty() {
-                        doc_text = Some(cmd.description.clone());
+                }
+            }
+            if fallback_entries.is_empty() {
+                for w in WIDGETS {
+                    let Some(cmd) = self.kb.get(w) else {
+                        continue;
+                    };
+                    if let Some(s) = cmd
+                        .synopsis
+                        .iter()
+                        .find(|s| s.split_whitespace().nth(1) == Some(sub))
+                    {
+                        fallback_entries.push((s.clone(), cmd.description.clone()));
+                        break;
                     }
                 }
             }
         }
+        if entries.is_empty() {
+            entries = fallback_entries;
+        }
 
         let mut md = format!("**Widget command** `{sub}` on `{head}`.\n");
-        if let Some(sig) = &signature {
-            md.push_str(&format!("\n```tcl\n{sig}\n```\n"));
-        }
         match (family_guess, documenting.len()) {
             (Some(f), _) => {
-                // A family is named; prefer ITS synopsis and doc (already
-                // selected above via head_is_this) and say so.
                 md.push_str(&format!(
                     "\nPath tail matches [`{f}`]; that page's documentation follows.\n"
                 ));
-                if let Some(d) = &doc_text {
-                    md.push('\n');
-                    md.push_str(d);
-                    md.push('\n');
-                }
             }
             (_, 0) => {
                 md.push_str(&format!(
@@ -1083,15 +1152,31 @@ impl Server {
                 ));
             }
             (_, n) => {
+                // The pages list is orientation, not the point; the entries
+                // below are the documentation. Cap the list so a shared form
+                // like `configure` (18 pages) does not bury it.
+                let shown = if n > 6 {
+                    format!("`{}`, and {} more", documenting[..6].join("`, `"), n - 6)
+                } else {
+                    format!("`{}`", documenting.join("`, `"))
+                };
                 md.push_str(&format!(
-                    "\nDocumented as a subcommand on {n} widget pages: `{}`.\n",
-                    documenting.join("`, `")
+                    "\n`{sub}` is a widget subcommand on {n} pages: {shown}.\n"
                 ));
-                if let Some(d) = &doc_text {
-                    md.push('\n');
-                    md.push_str(d);
-                    md.push('\n');
-                }
+            }
+        }
+        for (sig, doc) in &entries {
+            md.push_str(&format!("\n```tcl\n{sig}\n```\n"));
+            if !doc.is_empty() {
+                md.push_str(doc);
+                md.push('\n');
+            }
+        }
+        if entries.is_empty() {
+            if let Some(d) = page_description {
+                md.push('\n');
+                md.push_str(&d);
+                md.push('\n');
             }
         }
         md
@@ -2568,6 +2653,48 @@ mod tests {
             .widget_command_hover(uri, p, "frobnicate", "::")
             .expect("a dispatch word always gets a hover");
         assert!(md.contains("No Tk widget man page"), "{md}");
+    }
+
+    #[test]
+    fn ensemble_subcommand_hover_shows_the_subcommand_not_the_page() {
+        // `string match`: word_at yields `match`, which is no command of its
+        // own; the ensemble path must find `string`'s page and show the
+        // `match` entry — signature and prose — instead of nothing.
+        let text = "set x [string match $pat $s]\n";
+        let uri = "file:///ens.tcl";
+        let s = server_with(uri, text);
+        let li = s.docs.get(uri).unwrap().line_index();
+        let p = pos_at(text, "string", li, "match");
+        let md = s
+            .ensemble_subcommand_hover(uri, p, "match")
+            .expect("`match` is a `string` subcommand");
+        assert!(md.contains("string match ?-nocase? pattern string"), "{md}");
+        assert!(md.contains("See if pattern matches"), "{md}");
+        assert!(s.ensemble_subcommand_hover(uri, p, "nope").is_none());
+    }
+
+    #[test]
+    fn widget_hover_shows_every_form_of_a_group_subcommand() {
+        // `tag` on a text widget is a GROUP: the man page lists nested forms
+        // (`tag add`, `tag configure`, …) under the group .TP. The generator
+        // used to drop them, so the hover quoted "The following forms of the
+        // tag subcommand are currently supported:" and stopped. The forms
+        // must be present now.
+        let text = "set log .main.f.log\n$log tag names\n";
+        let uri = "file:///group.tcl";
+        let s = server_with(uri, text);
+        let li = s.docs.get(uri).unwrap().line_index();
+        let p = pos_at(text, "$log", li, "tag");
+        let md = s
+            .widget_command_hover(uri, p, "tag", "::")
+            .expect("tag is a documented widget subcommand");
+        assert!(md.contains("tag names"), "{md}");
+        assert!(md.contains("tag configure"), "{md}");
+        // And the intro must not end in a dangling "supported:" heading.
+        assert!(
+            !md.trim_end().ends_with("currently supported:"),
+            "dangling intro: {md}"
+        );
     }
 
     #[test]

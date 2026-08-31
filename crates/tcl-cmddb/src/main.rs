@@ -450,8 +450,12 @@ fn parse_page(text: &str, package: &str) -> Option<(Command, Option<Inherited>)>
             }
             Section::Description => {
                 if let Some(sub) = pending_tp.as_mut() {
-                    append_prose(&mut sub.doc, &clean(line));
-                } else if description.len() < 600 {
+                    // The literal `.` line that fills troff blank lines is not prose.
+                    let c = clean(line);
+                    if c != "." {
+                        append_prose(&mut sub.doc, &c);
+                    }
+                } else if description.len() < 1600 {
                     append_prose(&mut description, &clean(line));
                 }
             }
@@ -554,7 +558,17 @@ fn flush_op(pending: &mut Option<PendingOp>, cmd: &mut Command) {
 fn flush_tp(pending: &mut Option<Subcommand>, cmd: &mut Command) {
     if let Some(mut sub) = pending.take() {
         sub.doc = truncate(&sub.doc, 300);
-        if !cmd.subcommands.iter().any(|s| s.name == sub.name) {
+        // Dedup by identity, not just name: a group form and its nested
+        // forms share the dispatch word (`tag option ?arg...?` plus
+        // `tag add ...`, `tag bind ...` from the `.RS` list). The forms ARE
+        // the documentation for group commands; dropping them left hovers
+        // quoting "The following forms of the tag subcommand are
+        // supported:" and nothing after it.
+        if !cmd
+            .subcommands
+            .iter()
+            .any(|s| s.name == sub.name && s.signature == sub.signature)
+        {
             cmd.subcommands.push(sub);
         }
     }
