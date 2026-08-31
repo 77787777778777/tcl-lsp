@@ -671,6 +671,28 @@
         "button pathName ?options?"
       ],
       "description": "The button command creates a new window (given by the pathName argument) and makes it into a button widget. Additional options, described above, may be specified on the command line or in the option database to configure aspects of the button such as its colors, font, text, and initial relief.  The button command returns its pathName argument.  At the time this command is invoked, there must not exist a window named pathName, but pathName's parent must exist. A button is a widget that displays a textual string, bitmap or image. If text is displayed, it must all be in a single font, but it can occupy multiple lines on the screen (if it contains newlines",
+      "subcommands": [
+        {
+          "name": "cget",
+          "signature": "pathName cget option",
+          "doc": "Returns the current value of the configuration option given by option. Option may have any of the values accepted by the button command."
+        },
+        {
+          "name": "configure",
+          "signature": "pathName configure ?option? ?value option value ...?",
+          "doc": "Query or modify the configuration options of the widget. If no option is specified, returns a list describing all of the available options for pathName (see Tk_ConfigureInfo for information on the format of this list).  If option is specified with no value, then the command returns a list describing…"
+        },
+        {
+          "name": "flash",
+          "signature": "pathName flash",
+          "doc": "Flash the button.  This is accomplished by redisplaying the button several times, alternating between the configured activebackground and background colors.  At the end of the flash the button is left in the same normal/active state as when the command was invoked. This command is ignored if the but…"
+        },
+        {
+          "name": "invoke",
+          "signature": "pathName invoke",
+          "doc": "Invoke the Tcl command associated with the button, if there is one. The return value is the return value from the Tcl command, or an empty string if there is no command associated with the button. This command is ignored if the button's state is disabled."
+        }
+      ],
       "options": [
         {
           "flag": "-activebackground",
@@ -919,6 +941,172 @@
       "summary": "Create and manipulate 'canvas' hypergraphics drawing surface widgets",
       "synopsis": [
         "canvas pathName ?options?"
+      ],
+      "description": "The canvas command creates a new Tcl command whose name is pathName. This command may be used to invoke various operations on the widget. It has the following general form: pathName option ?arg arg ...? Option and the args determine the exact behavior of the command. The following widget commands are possible for canvas widgets: Selects the item just after (above) the one given by tagOrId in the display list. If tagOrId denotes more than one item, then the last (topmost) of these items in the display list is used. Selects all the items in the canvas. Selects the item just before (below) the one given by tagOrId",
+      "subcommands": [
+        {
+          "name": "addtag",
+          "signature": "pathName addtag tag searchSpec ?arg arg ...?",
+          "doc": "For each item that meets the constraints specified by searchSpec and the args, add tag to the list of tags associated with the item if it is not already present on that list. It is possible that no items will satisfy the constraints given by searchSpec and args, in which case the command has no effe…"
+        },
+        {
+          "name": "bbox",
+          "signature": "pathName bbox tagOrId ?tagOrId tagOrId ...?",
+          "doc": "Returns a list with four elements giving an approximate bounding box for all the items named by the tagOrId arguments. The list has the form such that the drawn areas of all the named elements are within the region bounded by x1 on the left, x2 on the right, y1 on the top, and y2 on the bottom. The…"
+        },
+        {
+          "name": "bind",
+          "signature": "pathName bind tagOrId ?sequence? ?command?",
+          "doc": "This command associates command with all the items given by tagOrId such that whenever the event sequence given by sequence occurs for one of the items the command will be invoked. This widget command is similar to the bind command except that it operates on items in a canvas rather than entire widg…"
+        },
+        {
+          "name": "canvasx",
+          "signature": "pathName canvasx screenx ?gridspacing?",
+          "doc": "Given a window x-coordinate in the canvas screenx, this command returns the canvas x-coordinate that is displayed at that location. If gridspacing is specified, then the canvas coordinate is rounded to the nearest multiple of gridspacing units."
+        },
+        {
+          "name": "canvasy",
+          "signature": "pathName canvasy screeny ?gridspacing?",
+          "doc": "Given a window y-coordinate in the canvas screeny this command returns the canvas y-coordinate that is displayed at that location. If gridspacing is specified, then the canvas coordinate is rounded to the nearest multiple of gridspacing units."
+        },
+        {
+          "name": "cget",
+          "signature": "pathName cget option",
+          "doc": "Returns the current value of the configuration option given by option. Option may have any of the values accepted by the canvas command."
+        },
+        {
+          "name": "configure",
+          "signature": "pathName configure ?option? ?value? ?option value ...?",
+          "doc": "Query or modify the configuration options of the widget. If no option is specified, returns a list describing all of the available options for pathName (see Tk_ConfigureInfo for information on the format of this list). If option is specified with no value, then the command returns a list describing…"
+        },
+        {
+          "name": "coords",
+          "signature": "pathName coords tagOrId ?x0 y0 ...?"
+        },
+        {
+          "name": "create",
+          "signature": "pathName create type x y ?x y ...? ?option value ...?"
+        },
+        {
+          "name": "dchars",
+          "signature": "pathName dchars tagOrId first ?last?",
+          "doc": "For each item given by tagOrId, delete the characters, or coordinates, in the range given by first and last, inclusive. If some of the items given by tagOrId do not support indexing operations then they ignore this operation. Text items interpret first and last as indices to a character, line and po…"
+        },
+        {
+          "name": "delete",
+          "signature": "pathName delete ?tagOrId tagOrId ...?",
+          "doc": "Delete each of the items given by each tagOrId, and return an empty string."
+        },
+        {
+          "name": "dtag",
+          "signature": "pathName dtag tagOrId ?tagToDelete?",
+          "doc": "For each of the items given by tagOrId, delete the tag given by tagToDelete from the list of those associated with the item. If an item does not have the tag tagToDelete then the item is unaffected by the command. If tagToDelete is omitted then it defaults to tagOrId. This command returns an empty s…"
+        },
+        {
+          "name": "find",
+          "signature": "pathName find searchCommand ?arg arg ...?",
+          "doc": "This command returns a list consisting of all the items that meet the constraints specified by searchCommand and arg's. SearchCommand and args have any of the forms accepted by the addtag command. The items are returned in stacking order, with the lowest item first."
+        },
+        {
+          "name": "focus",
+          "signature": "pathName focus ?tagOrId?",
+          "doc": "Set the keyboard focus for the canvas widget to the item given by tagOrId. If tagOrId refers to several items, then the focus is set to the first such item in the display list that supports the insertion cursor. If tagOrId does not refer to any items, or if none of them support the insertion cursor,…"
+        },
+        {
+          "name": "gettags",
+          "signature": "pathName gettags tagOrId",
+          "doc": "Return a list whose elements are the tags associated with the item given by tagOrId. If tagOrId refers to more than one item, then the tags are returned from the first such item in the display list. If tagOrId does not refer to any items, or if the item contains no tags, then an empty string is retu…"
+        },
+        {
+          "name": "icursor",
+          "signature": "pathName icursor tagOrId index",
+          "doc": "Set the position of the insertion cursor for the item(s) given by tagOrId to just before the character whose position is given by index. If some or all of the items given by tagOrId do not support an insertion cursor then this command has no effect on them. See INDICES above for a description of the…"
+        },
+        {
+          "name": "imove",
+          "signature": "pathName imove tagOrId index x y",
+          "doc": "This command causes the index'th coordinate of each of the items indicated by tagOrId to be relocated to the location (x,y). Each item interprets index independently according to the rules described in INDICES above. Out of the standard set of items, only line and polygon items may have their coordi…"
+        },
+        {
+          "name": "index",
+          "signature": "pathName index tagOrId index",
+          "doc": "This command returns a decimal string giving the numerical index within tagOrId corresponding to index. Index gives a textual description of the desired position as described in INDICES above. Text items interpret index as an index to a character, line and polygon items interpret it as an index to a…"
+        },
+        {
+          "name": "insert",
+          "signature": "pathName insert tagOrId beforeThis string",
+          "doc": "For each of the items given by tagOrId, if the item supports text or coordinate, insertion then string is inserted into the item's text just before the character, or coordinate, whose index is beforeThis. Text items interpret beforeThis as an index to a character, line and polygon items interpret it…"
+        },
+        {
+          "name": "itemcget",
+          "signature": "pathName itemcget tagOrId option",
+          "doc": "Returns the current value of the configuration option for the item given by tagOrId whose name is option. This command is similar to the cget widget command except that it applies to a particular item rather than the widget as a whole. Option may have any of the values accepted by the create widget…"
+        },
+        {
+          "name": "itemconfigure",
+          "signature": "pathName itemconfigure tagOrId ?option? ?value? ?option value ...?",
+          "doc": "This command is similar to the configure widget command except that it modifies item-specific options for the items given by tagOrId instead of modifying options for the overall canvas widget. If no option is specified, returns a list describing all of the available options for the first item given…"
+        },
+        {
+          "name": "lower",
+          "signature": "pathName lower tagOrId ?belowThis?",
+          "doc": "Move all of the items given by tagOrId to a new position in the display list just before the item given by belowThis. If tagOrId refers to more than one item then all are moved but the relative order of the moved items will not be changed. BelowThis is a tag or id; if it refers to more than one item…"
+        },
+        {
+          "name": "move",
+          "signature": "pathName move tagOrId xAmount yAmount",
+          "doc": "Move each of the items given by tagOrId in the canvas coordinate space by adding xAmount to the x-coordinate of each point associated with the item and yAmount to the y-coordinate of each point associated with the item. This command returns an empty string."
+        },
+        {
+          "name": "moveto",
+          "signature": "pathName moveto tagOrId xPos yPos",
+          "doc": "Move the items given by tagOrId in the canvas coordinate space so that the first coordinate pair (the upper-left corner of the bounding box) of the first item (the lowest in the display list) with tag tagOrId is located at position (xPos,yPos). xPos and yPos may be the empty string, in which case th…"
+        },
+        {
+          "name": "postscript",
+          "signature": "pathName postscript ?option value option value ...?",
+          "doc": "Generate a Postscript representation for part or all of the canvas. If the -file option is specified then the Postscript is written to a file and an empty string is returned; otherwise the Postscript is returned as the result of the command. If the interpreter that owns the canvas is marked as safe,…"
+        },
+        {
+          "name": "raise",
+          "signature": "pathName raise tagOrId ?aboveThis?",
+          "doc": "Move all of the items given by tagOrId to a new position in the display list just after the item given by aboveThis. If tagOrId refers to more than one item then all are moved but the relative order of the moved items will not be changed. AboveThis is a tag or id; if it refers to more than one item…"
+        },
+        {
+          "name": "rchars",
+          "signature": "pathName rchars tagOrId first last string",
+          "doc": "This command causes the text or coordinates between first and last for each of the items indicated by tagOrId to be replaced by string. Each item interprets first and last independently according to the rules described in INDICES above. Out of the standard set of items, text items support this opera…"
+        },
+        {
+          "name": "scale",
+          "signature": "pathName scale tagOrId xOrigin yOrigin xScale yScale",
+          "doc": "Rescale the coordinates of all of the items given by tagOrId in canvas coordinate space. XOrigin and yOrigin identify the origin for the scaling operation and xScale and yScale identify the scale factors for x- and y-coordinates, respectively (a scale factor of 1.0 implies no change to that coordina…"
+        },
+        {
+          "name": "scan",
+          "signature": "pathName scan option args",
+          "doc": "This command is used to implement scanning on canvases. It has two forms, depending on option:"
+        },
+        {
+          "name": "select",
+          "signature": "pathName select option ?tagOrId arg?",
+          "doc": "Manipulates the selection in one of several ways, depending on option. The command may take any of the forms described below. In all of the descriptions below, tagOrId must refer to an item that supports indexing and selection; if it refers to multiple items then the first of these that supports ind…"
+        },
+        {
+          "name": "type",
+          "signature": "pathName type tagOrId",
+          "doc": "Returns the type of the item given by tagOrId, such as rectangle or text. If tagOrId refers to more than one item, then the type of the first item in the display list is returned. If tagOrId does not refer to any items at all then an empty string is returned."
+        },
+        {
+          "name": "xview",
+          "signature": "pathName xview ?args?",
+          "doc": "This command is used to query and change the horizontal position of the information displayed in the canvas's window. It can take any of the following forms:"
+        },
+        {
+          "name": "yview",
+          "signature": "pathName yview ?args?",
+          "doc": "This command is used to query and change the vertical position of the information displayed in the canvas's window. It can take any of the following forms:"
+        }
       ],
       "options": [
         {
@@ -1257,6 +1445,43 @@
         "checkbutton pathName ?options?"
       ],
       "description": "The checkbutton command creates a new window (given by the pathName argument) and makes it into a checkbutton widget. Additional options, described above, may be specified on the command line or in the option database to configure aspects of the checkbutton such as its colors, font, text, and initial relief.  The checkbutton command returns its pathName argument.  At the time this command is invoked, there must not exist a window named pathName, but pathName's parent must exist. A checkbutton is a widget that displays a textual string, bitmap or image and a square called an indicator. If text is displayed, it must all be in a single font, but it",
+      "subcommands": [
+        {
+          "name": "cget",
+          "signature": "pathName cget option",
+          "doc": "Returns the current value of the configuration option given by option. Option may have any of the values accepted by the checkbutton command."
+        },
+        {
+          "name": "configure",
+          "signature": "pathName configure ?option? ?value option value ...?",
+          "doc": "Query or modify the configuration options of the widget. If no option is specified, returns a list describing all of the available options for pathName (see Tk_ConfigureInfo for information on the format of this list).  If option is specified with no value, then the command returns a list describing…"
+        },
+        {
+          "name": "deselect",
+          "signature": "pathName deselect",
+          "doc": "Deselects the checkbutton and sets the associated variable to its value."
+        },
+        {
+          "name": "flash",
+          "signature": "pathName flash",
+          "doc": "Flashes the checkbutton.  This is accomplished by redisplaying the checkbutton several times, alternating between active and normal colors.  At the end of the flash the checkbutton is left in the same normal/active state as when the command was invoked. This command is ignored if the checkbutton's s…"
+        },
+        {
+          "name": "invoke",
+          "signature": "pathName invoke",
+          "doc": "Does just what would have happened if the user invoked the checkbutton with the mouse: toggle the selection state of the button and invoke the Tcl command associated with the checkbutton, if there is one. The return value is the return value from the Tcl command, or an empty string if there is no co…"
+        },
+        {
+          "name": "select",
+          "signature": "pathName select",
+          "doc": "Selects the checkbutton and sets the associated variable to its value."
+        },
+        {
+          "name": "toggle",
+          "signature": "pathName toggle",
+          "doc": "Toggles the selection state of the button, redisplaying it and modifying its associated variable to reflect the new state."
+        }
+      ],
       "options": [
         {
           "flag": "-activebackground",
@@ -1946,6 +2171,68 @@
         "entry pathName ?options?"
       ],
       "description": "The entry command creates a new window (given by the pathName argument) and makes it into an entry widget. Additional options, described above, may be specified on the command line or in the option database to configure aspects of the entry such as its colors, font, and relief.  The entry command returns its pathName argument.  At the time this command is invoked, there must not exist a window named pathName, but pathName's parent must exist. An entry is a widget that displays a one-line text string and allows that string to be edited using widget commands described below, which are typically bound to keystrokes and mouse actions.",
+      "subcommands": [
+        {
+          "name": "bbox",
+          "signature": "pathName bbox index",
+          "doc": "Returns a list of four numbers describing the bounding box of the character given by index. The first two elements of the list give the x and y coordinates of the upper-left corner of the screen area covered by the character (in pixels relative to the widget) and the last two elements give the width…"
+        },
+        {
+          "name": "cget",
+          "signature": "pathName cget option",
+          "doc": "Returns the current value of the configuration option given by option. Option may have any of the values accepted by the entry command."
+        },
+        {
+          "name": "configure",
+          "signature": "pathName configure ?option? ?value option value ...?",
+          "doc": "Query or modify the configuration options of the widget. If no option is specified, returns a list describing all of the available options for pathName (see Tk_ConfigureInfo for information on the format of this list).  If option is specified with no value, then the command returns a list describing…"
+        },
+        {
+          "name": "delete",
+          "signature": "pathName delete first ?last?",
+          "doc": "Delete one or more elements of the entry. First is the index of the first character to delete, and last is the index of the character just after the last one to delete. If last is not specified it defaults to first+1, i.e. a single character is deleted. This command returns an empty string."
+        },
+        {
+          "name": "get",
+          "signature": "pathName get",
+          "doc": "Returns the entry's string."
+        },
+        {
+          "name": "icursor",
+          "signature": "pathName icursor index",
+          "doc": "Arrange for the insertion cursor to be displayed just before the character given by index.  Returns an empty string."
+        },
+        {
+          "name": "index",
+          "signature": "pathName index index",
+          "doc": "Returns the numerical index corresponding to index."
+        },
+        {
+          "name": "insert",
+          "signature": "pathName insert index string",
+          "doc": "Insert the characters of string just before the character indicated by index.  Returns an empty string."
+        },
+        {
+          "name": "scan",
+          "signature": "pathName scan option args",
+          "doc": "This command is used to implement scanning on entries.  It has two forms, depending on option:"
+        },
+        {
+          "name": "selection",
+          "signature": "pathName selection option arg",
+          "doc": "This command is used to adjust the selection within an entry.  It has several forms, depending on option:"
+        },
+        {
+          "name": "validate",
+          "signature": "pathName validate",
+          "doc": "This command is used to force an evaluation of the -validatecommand independent of the conditions specified by the -validate option. This is done by temporarily setting the -validate option to all. It returns 0 or 1."
+        },
+        {
+          "name": "xview",
+          "signature": "pathName xview args",
+          "doc": "This command is used to query and change the horizontal position of the text in the widget's window.  It can take any of the following forms:"
+        }
+      ],
       "options": [
         {
           "flag": "-background",
@@ -2691,7 +2978,19 @@
       "synopsis": [
         "frame pathName ?options?"
       ],
-      "description": "The frame command creates a new window (given by the pathName argument) and makes it into a frame widget. Additional options, described above, may be specified on the command line or in the option database to configure aspects of the frame such as its background color and relief.  The frame command returns the path name of the new window. A frame is a simple widget.  Its primary purpose is to act as a spacer or container for complex window layouts.  The only features of a frame are its background color and an optional 3-D border to make the frame appear raised or sunken.",
+      "description": "The frame command creates a new window (given by the pathName argument) and makes it into a frame widget. Additional options, described above, may be specified on the command line or in the option database to configure aspects of the frame such as its background color and relief.  The frame command returns the path name of the new window. A frame is a simple widget.  Its primary purpose is to act as a spacer or container for complex window layouts.  The only features of a frame are its background color and an optional 3-D border to make the frame appear raised or sunken. The frame command creates a new Tcl command whose",
+      "subcommands": [
+        {
+          "name": "cget",
+          "signature": "pathName cget option",
+          "doc": "Returns the current value of the configuration option given by option. Option may have any of the values accepted by the frame command."
+        },
+        {
+          "name": "configure",
+          "signature": "pathName configure ?option? ?value option value ...?",
+          "doc": "Query or modify the configuration options of the widget. If no option is specified, returns a list describing all of the available options for pathName (see Tk_ConfigureInfo for information on the format of this list).  If option is specified with no value, then the command returns a list describing…"
+        }
+      ],
       "options": [
         {
           "flag": "-background",
@@ -3279,6 +3578,18 @@
         "label pathName ?options?"
       ],
       "description": "The label command creates a new window (given by the pathName argument) and makes it into a label widget. Additional options, described above, may be specified on the command line or in the option database to configure aspects of the label such as its colors, font, text, and initial relief.  The label command returns its pathName argument.  At the time this command is invoked, there must not exist a window named pathName, but pathName's parent must exist. A label is a widget that displays a textual string, bitmap or image. If text is displayed, it must all be in a single font, but it can occupy multiple lines on the screen (if it contains newlines",
+      "subcommands": [
+        {
+          "name": "cget",
+          "signature": "pathName cget option",
+          "doc": "Returns the current value of the configuration option given by option. Option may have any of the values accepted by the label command."
+        },
+        {
+          "name": "configure",
+          "signature": "pathName configure ?option? ?value option value ...?",
+          "doc": "Query or modify the configuration options of the widget. If no option is specified, returns a list describing all of the available options for pathName (see Tk_ConfigureInfo for information on the format of this list).  If option is specified with no value, then the command returns a list describing…"
+        }
+      ],
       "options": [
         {
           "flag": "-activebackground",
@@ -3496,7 +3807,19 @@
       "synopsis": [
         "labelframe pathName ?options?"
       ],
-      "description": "The labelframe command creates a new window (given by the pathName argument) and makes it into a labelframe widget. Additional options, described above, may be specified on the command line or in the option database to configure aspects of the labelframe such as its background color and relief.  The labelframe command returns the path name of the new window. A labelframe is a simple widget.  Its primary purpose is to act as a spacer or container for complex window layouts.  It has the features of a frame plus the ability to display a label.",
+      "description": "The labelframe command creates a new window (given by the pathName argument) and makes it into a labelframe widget. Additional options, described above, may be specified on the command line or in the option database to configure aspects of the labelframe such as its background color and relief.  The labelframe command returns the path name of the new window. A labelframe is a simple widget.  Its primary purpose is to act as a spacer or container for complex window layouts.  It has the features of a frame plus the ability to display a label. The labelframe command creates a new Tcl command whose",
+      "subcommands": [
+        {
+          "name": "cget",
+          "signature": "pathName cget option",
+          "doc": "Returns the current value of the configuration option given by option. Option may have any of the values accepted by the labelframe command."
+        },
+        {
+          "name": "configure",
+          "signature": "pathName configure ?option? ?value option value ...?",
+          "doc": "Query or modify the configuration options of the widget. If no option is specified, returns a list describing all of the available options for pathName (see Tk_ConfigureInfo for information on the format of this list).  If option is specified with no value, then the command returns a list describing…"
+        }
+      ],
       "options": [
         {
           "flag": "-background",
@@ -3725,6 +4048,98 @@
         "listbox pathName ?options?"
       ],
       "description": "The listbox command creates a new window (given by the pathName argument) and makes it into a listbox widget. Additional options, described above, may be specified on the command line or in the option database to configure aspects of the listbox such as its colors, font, text, and relief.  The listbox command returns its pathName argument.  At the time this command is invoked, there must not exist a window named pathName, but pathName's parent must exist. A listbox is a widget that displays a list of strings, one per line. When first created, a new listbox has no elements. Elements may be added or deleted using widget commands described",
+      "subcommands": [
+        {
+          "name": "activate",
+          "signature": "pathName activate index",
+          "doc": "Sets the active element to the one indicated by index. If index is outside the range of elements in the listbox then the closest element is activated. The active element is drawn as specified by -activestyle when the widget has the input focus, and its index may be retrieved with the index active."
+        },
+        {
+          "name": "bbox",
+          "signature": "pathName bbox index",
+          "doc": "Returns a list of four numbers describing the bounding box of the text in the element given by index. The first two elements of the list give the x and y coordinates of the upper-left corner of the screen area covered by the text (specified in pixels relative to the widget) and the last two elements…"
+        },
+        {
+          "name": "cget",
+          "signature": "pathName cget option",
+          "doc": "Returns the current value of the configuration option given by option. Option may have any of the values accepted by the listbox command."
+        },
+        {
+          "name": "configure",
+          "signature": "pathName configure ?option? ?value option value ...?",
+          "doc": "Query or modify the configuration options of the widget. If no option is specified, returns a list describing all of the available options for pathName (see Tk_ConfigureInfo for information on the format of this list).  If option is specified with no value, then the command returns a list describing…"
+        },
+        {
+          "name": "curselection",
+          "signature": "pathName curselection",
+          "doc": "Returns a list containing the numerical indices of all of the elements in the listbox that are currently selected. If there are no elements selected in the listbox then an empty string is returned."
+        },
+        {
+          "name": "delete",
+          "signature": "pathName delete first ?last?",
+          "doc": "Deletes one or more elements of the listbox.  First and last are indices specifying the first and last elements in the range to delete.  If last is not specified it defaults to first, i.e. a single element is deleted."
+        },
+        {
+          "name": "get",
+          "signature": "pathName get first ?last?",
+          "doc": "If last is omitted, returns the contents of the listbox element indicated by first, or an empty string if first refers to a non-existent element. If last is specified, the command returns a list whose elements are all of the listbox elements between first and last, inclusive. Both first and last may…"
+        },
+        {
+          "name": "index",
+          "signature": "pathName index index",
+          "doc": "Returns the integer index value that corresponds to index. If index is end the return value is a count of the number of elements in the listbox (not the index of the last element)."
+        },
+        {
+          "name": "insert",
+          "signature": "pathName insert index ?element element ...?",
+          "doc": "Inserts zero or more new elements in the list just before the element given by index.  If index is specified as end then the new elements are added to the end of the list.  Returns an empty string."
+        },
+        {
+          "name": "itemcget",
+          "signature": "pathName itemcget index option",
+          "doc": "Returns the current value of the item configuration option given by option. Option may have any of the values accepted by the itemconfigure command."
+        },
+        {
+          "name": "itemconfigure",
+          "signature": "pathName itemconfigure index ?option? ?value? ?option value ...?",
+          "doc": "Query or modify the configuration options of an item in the listbox. If no option is specified, returns a list describing all of the available options for the item (see Tk_ConfigureInfo for information on the format of this list).  If option is specified with no value, then the command returns a lis…"
+        },
+        {
+          "name": "nearest",
+          "signature": "pathName nearest y",
+          "doc": "Given a y-coordinate within the listbox window, this command returns the index of the (visible) listbox element nearest to that y-coordinate."
+        },
+        {
+          "name": "scan",
+          "signature": "pathName scan option args",
+          "doc": "This command is used to implement scanning on listboxes.  It has two forms, depending on option:"
+        },
+        {
+          "name": "see",
+          "signature": "pathName see index",
+          "doc": "Adjust the view in the listbox so that the element given by index is visible. If the element is already visible then the command has no effect; if the element is near one edge of the window then the listbox scrolls to bring the element into view at the edge;  otherwise the listbox scrolls to center…"
+        },
+        {
+          "name": "selection",
+          "signature": "pathName selection option arg",
+          "doc": "This command is used to adjust the selection within a listbox.  It has several forms, depending on option:"
+        },
+        {
+          "name": "size",
+          "signature": "pathName size",
+          "doc": "Returns a decimal string indicating the total number of elements in the listbox."
+        },
+        {
+          "name": "xview",
+          "signature": "pathName xview ?args",
+          "doc": "This command is used to query and change the horizontal position of the information in the widget's window.  It can take any of the following forms:"
+        },
+        {
+          "name": "yview",
+          "signature": "pathName yview ?args?",
+          "doc": "This command is used to query and change the vertical position of the text in the widget's window. It can take any of the following forms:"
+        }
+      ],
       "options": [
         {
           "flag": "-activestyle",
@@ -4170,6 +4585,94 @@
         "menu pathName ?options?",
         "tk_menuSetFocus pathName"
       ],
+      "description": "The menu command creates a new Tcl command whose name is pathName.  This command may be used to invoke various operations on the widget.  It has the following general form: pathName option ?arg arg ...? Option and the args determine the exact behavior of the command. Many of the widget commands for a menu take as one argument an indicator of which entry of the menu to operate on. These indicators are called indexes and may be specified in any of the following forms: Indicates the entry that is currently active.  If no entry is active then this form is equivalent to none.  This form may not be abbreviated.",
+      "subcommands": [
+        {
+          "name": "activate",
+          "signature": "pathName activate index",
+          "doc": "Change the state of the entry indicated by index to active and redisplay it using its active colors. Any previously-active entry is deactivated.  If index is specified as none, or if the specified entry is disabled, then the menu ends up with no active entry. Returns an empty string."
+        },
+        {
+          "name": "add",
+          "signature": "pathName add type ?option value option value ...?",
+          "doc": "Add a new entry to the bottom of the menu.  The new entry's type is given by type and must be one of cascade, checkbutton, command, radiobutton, or separator, or a unique abbreviation of one of the above.  If additional arguments are present, they specify the options listed in the MENU ENTRY OPTIONS…"
+        },
+        {
+          "name": "cget",
+          "signature": "pathName cget option",
+          "doc": "Returns the current value of the configuration option given by option. Option may have any of the values accepted by the menu command."
+        },
+        {
+          "name": "clone",
+          "signature": "pathName clone newPathname ?cloneType?",
+          "doc": "Makes a clone of the current menu named newPathName. This clone is a menu in its own right, but any changes to the clone are propagated to the original menu and vice versa. cloneType can be normal, menubar, or tearoff. Should not normally be called outside of the Tk library. See the CLONES section f…"
+        },
+        {
+          "name": "configure",
+          "signature": "pathName configure ?option? ?value option value ...?",
+          "doc": "Query or modify the configuration options of the widget. If no option is specified, returns a list describing all of the available options for pathName (see Tk_ConfigureInfo for information on the format of this list).  If option is specified with no value, then the command returns a list describing…"
+        },
+        {
+          "name": "delete",
+          "signature": "pathName delete index1 ?index2?",
+          "doc": "Delete all of the menu entries between index1 and index2 inclusive. If index2 is omitted then it defaults to index1. Attempts to delete a tear-off menu entry are ignored (instead, you should change the -tearoff option to remove the tear-off entry)."
+        },
+        {
+          "name": "entrycget",
+          "signature": "pathName entrycget index option",
+          "doc": "Returns the current value of a configuration option for the entry given by index. Option may have any of the names described in the MENU ENTRY OPTIONS section below."
+        },
+        {
+          "name": "entryconfigure",
+          "signature": "pathName entryconfigure index ?options...?",
+          "doc": "This command is similar to the configure command, except that it applies to the options for an individual entry, whereas configure applies to the options for the menu as a whole. Options may have any of the values described in the MENU ENTRY OPTIONS section below.  If options are specified, options…"
+        },
+        {
+          "name": "index",
+          "signature": "pathName index index",
+          "doc": "Returns the numerical index corresponding to index, or none if index was specified as none."
+        },
+        {
+          "name": "insert",
+          "signature": "pathName insert index type ?option value option value ...?",
+          "doc": "Same as the add widget command except that it inserts the new entry just before the entry given by index, instead of appending to the end of the menu.  The type, option, and value arguments have the same interpretation as for the add widget command.  It is not possible to insert new menu entries bef…"
+        },
+        {
+          "name": "invoke",
+          "signature": "pathName invoke index",
+          "doc": "Invoke the action of the menu entry.  See the sections on the individual entries above for details on what happens.  If the menu entry is disabled then nothing happens.  If the entry has a command associated with it then the result of that command is returned as the result of the invoke widget comma…"
+        },
+        {
+          "name": "post",
+          "signature": "pathName post x y ?index?",
+          "doc": "Arrange for the menu to be displayed on the screen at the root-window coordinates given by x and y.  If an index is specified the menu will be located so that the entry with that index is displayed at the point.  These coordinates are adjusted if necessary to guarantee that the entire menu is visibl…"
+        },
+        {
+          "name": "postcascade",
+          "signature": "pathName postcascade index",
+          "doc": "Posts the submenu associated with the cascade entry given by index, and unposts any previously posted submenu. If index does not correspond to a cascade entry, or if pathName is not posted, the command has no effect except to unpost any currently posted submenu."
+        },
+        {
+          "name": "type",
+          "signature": "pathName type index",
+          "doc": "Returns the type of the menu entry given by index. This is the type argument passed to the add or insert widget command when the entry was created, such as command or separator, or tearoff for a tear-off entry."
+        },
+        {
+          "name": "unpost",
+          "signature": "pathName unpost",
+          "doc": "Unmap the window so that it is no longer displayed.  If a lower-level cascaded menu is posted, unpost that menu.  Returns an empty string. This subcommand does not work on Windows and the Macintosh, as those platforms have their own way of unposting menus."
+        },
+        {
+          "name": "xposition",
+          "signature": "pathName xposition index",
+          "doc": "Returns a decimal string giving the x-coordinate within the menu window of the leftmost pixel in the entry specified by index."
+        },
+        {
+          "name": "yposition",
+          "signature": "pathName yposition index",
+          "doc": "Returns a decimal string giving the y-coordinate within the menu window of the topmost pixel in the entry specified by index."
+        }
+      ],
       "options": [
         {
           "flag": "-activebackground",
@@ -4313,6 +4816,19 @@
       "summary": "Create and manipulate 'menubutton' pop-up menu indicator widgets",
       "synopsis": [
         "menubutton pathName ?options?"
+      ],
+      "description": "The menubutton command creates a new Tcl command whose name is pathName.  This command may be used to invoke various operations on the widget.  It has the following general form: pathName option ?arg ...? Option and the args determine the exact behavior of the command.  The following commands are possible for menubutton widgets:",
+      "subcommands": [
+        {
+          "name": "cget",
+          "signature": "pathName cget option",
+          "doc": "Returns the current value of the configuration option given by option. Option may have any of the values accepted by the menubutton command."
+        },
+        {
+          "name": "configure",
+          "signature": "pathName configure ?option? ?value option value ...?",
+          "doc": "Query or modify the configuration options of the widget. If no option is specified, returns a list describing all of the available options for pathName (see Tk_ConfigureInfo for information on the format of this list).  If option is specified with no value, then the command returns a list describing…"
+        }
       ],
       "options": [
         {
@@ -4550,6 +5066,18 @@
         "message pathName ?options?"
       ],
       "description": "The message command creates a new window (given by the pathName argument) and makes it into a message widget. Additional options, described above, may be specified on the command line or in the option database to configure aspects of the message such as its colors, font, text, and initial relief.  The message command returns its pathName argument.  At the time this command is invoked, there must not exist a window named pathName, but pathName's parent must exist. A message is a widget that displays a textual string.  A message widget has three special features that differentiate it from a label widget.  First, it breaks up",
+      "subcommands": [
+        {
+          "name": "cget",
+          "signature": "pathName cget option",
+          "doc": "Returns the current value of the configuration option given by option. Option may have any of the values accepted by the message command."
+        },
+        {
+          "name": "configure",
+          "signature": "pathName configure ?option? ?value option value ...?",
+          "doc": "Query or modify the configuration options of the widget. If no option is specified, returns a list describing all of the available options for pathName (see Tk_ConfigureInfo for information on the format of this list).  If option is specified with no value, then the command returns a list describing…"
+        }
+      ],
       "options": [
         {
           "flag": "-anchor",
@@ -5277,6 +5805,58 @@
         "panedwindow pathName ?options?"
       ],
       "description": "The panedwindow command creates a new window (given by the pathName argument) and makes it into a panedwindow widget. Additional options, described above, may be specified on the command line or in the option database to configure aspects of the panedwindow such as its default background color and relief.  The panedwindow command returns the path name of the new window. A panedwindow widget contains any number of panes, arranged horizontally or vertically, according to the value of the -orient option.  Each pane contains one widget, and each pair of panes is separated by a moveable (via mouse movements) sash.  Moving a",
+      "subcommands": [
+        {
+          "name": "add",
+          "signature": "pathName add window ?window ...? ?option value ...?",
+          "doc": "Add one or more windows to the panedwindow, each in a separate pane. The arguments consist of the names of one or more windows followed by pairs of arguments that specify how to manage the windows. Option may have any of the values accepted by the configure subcommand."
+        },
+        {
+          "name": "cget",
+          "signature": "pathName cget option",
+          "doc": "Returns the current value of the configuration option given by option.  Option may have any of the values accepted by the panedwindow command."
+        },
+        {
+          "name": "configure",
+          "signature": "pathName configure ?option? ?value option value ...?",
+          "doc": "Query or modify the configuration options of the widget.  If no option is specified, returns a list describing all of the available options for pathName (see Tk_ConfigureInfo for information on the format of this list).  If option is specified with no value, then the command returns a list describin…"
+        },
+        {
+          "name": "forget",
+          "signature": "pathName forget window ?window ...?",
+          "doc": "Remove the pane containing window from the panedwindow.  All geometry management options for window will be forgotten."
+        },
+        {
+          "name": "identify",
+          "signature": "pathName identify x y",
+          "doc": "Identify the panedwindow component underneath the point given by x and y, in window coordinates.  If the point is over a sash or a sash handle, the result is a two element list containing the index of the sash or handle, and a word indicating whether it is over a sash or a handle, such as {0 sash} o…"
+        },
+        {
+          "name": "panecget",
+          "signature": "pathName panecget window option",
+          "doc": "Query a management option for window.  Option may be any value allowed by the paneconfigure subcommand."
+        },
+        {
+          "name": "paneconfigure",
+          "signature": "pathName paneconfigure window ?option? ?value option value ...?",
+          "doc": "Query or modify the management options for window.  If no option is specified, returns a list describing all of the available options for pathName (see Tk_ConfigureInfo for information on the format of this list).  If option is specified with no value, then the command returns a list describing the…"
+        },
+        {
+          "name": "panes",
+          "signature": "pathName panes",
+          "doc": "Returns an ordered list of the widgets managed by pathName."
+        },
+        {
+          "name": "proxy",
+          "signature": "pathName proxy ?args?",
+          "doc": "This command is used to query and change the position of the sash proxy, used for rubberband-style pane resizing. It can take any of the following forms:"
+        },
+        {
+          "name": "sash",
+          "signature": "pathName sash ?args?",
+          "doc": "This command is used to query and change the position of sashes in the panedwindow.  It can take any of the following forms:"
+        }
+      ],
       "options": [
         {
           "flag": "-background",
@@ -5541,6 +6121,38 @@
         "radiobutton pathName ?options?"
       ],
       "description": "The radiobutton command creates a new window (given by the pathName argument) and makes it into a radiobutton widget. Additional options, described above, may be specified on the command line or in the option database to configure aspects of the radiobutton such as its colors, font, text, and initial relief.  The radiobutton command returns its pathName argument.  At the time this command is invoked, there must not exist a window named pathName, but pathName's parent must exist. A radiobutton is a widget that displays a textual string, bitmap or image and a diamond or circle called an indicator.",
+      "subcommands": [
+        {
+          "name": "cget",
+          "signature": "pathName cget option",
+          "doc": "Returns the current value of the configuration option given by option. Option may have any of the values accepted by the radiobutton command."
+        },
+        {
+          "name": "configure",
+          "signature": "pathName configure ?option? ?value option value ...?",
+          "doc": "Query or modify the configuration options of the widget. If no option is specified, returns a list describing all of the available options for pathName (see Tk_ConfigureInfo for information on the format of this list).  If option is specified with no value, the command returns a list describing the…"
+        },
+        {
+          "name": "deselect",
+          "signature": "pathName deselect",
+          "doc": "Deselects the radiobutton and sets the associated variable to an empty string. If this radiobutton was not currently selected, the command has no effect."
+        },
+        {
+          "name": "flash",
+          "signature": "pathName flash",
+          "doc": "Flashes the radiobutton.  This is accomplished by redisplaying the radiobutton several times, alternating between active and normal colors.  At the end of the flash the radiobutton is left in the same normal/active state as when the command was invoked. This command is ignored if the radiobutton's s…"
+        },
+        {
+          "name": "invoke",
+          "signature": "pathName invoke",
+          "doc": "Does just what would have happened if the user invoked the radiobutton with the mouse: selects the button and invokes its associated Tcl command, if there is one. The return value is the return value from the Tcl command, or an empty string if there is no command associated with the radiobutton. Thi…"
+        },
+        {
+          "name": "select",
+          "signature": "pathName select",
+          "doc": "Selects the radiobutton and sets the associated variable to the value corresponding to this widget."
+        }
+      ],
       "options": [
         {
           "flag": "-activebackground",
@@ -5938,6 +6550,38 @@
         "scale pathName ?options?"
       ],
       "description": "The scale command creates a new window (given by the pathName argument) and makes it into a scale widget. Additional options, described above, may be specified on the command line or in the option database to configure aspects of the scale such as its colors, orientation, and relief.  The scale command returns its pathName argument.  At the time this command is invoked, there must not exist a window named pathName, but pathName's parent must exist. A scale is a widget that displays a rectangular trough and a small slider.  The trough corresponds to a range of real values (determined by the -from, -to, and",
+      "subcommands": [
+        {
+          "name": "cget",
+          "signature": "pathName cget option",
+          "doc": "Returns the current value of the configuration option given by option. Option may have any of the values accepted by the scale command."
+        },
+        {
+          "name": "configure",
+          "signature": "pathName configure ?option? ?value option value ...?",
+          "doc": "Query or modify the configuration options of the widget. If no option is specified, returns a list describing all of the available options for pathName (see Tk_ConfigureInfo for information on the format of this list).  If option is specified with no value, then the command returns a list describing…"
+        },
+        {
+          "name": "coords",
+          "signature": "pathName coords ?value?",
+          "doc": "Returns a list whose elements are the x and y coordinates of the point along the centerline of the trough that corresponds to value. If value is omitted then the scale's current value is used."
+        },
+        {
+          "name": "get",
+          "signature": "pathName get ?x y?",
+          "doc": "If x and y are omitted, returns the current value of the scale.  If x and y are specified, they give pixel coordinates within the widget;  the command returns the scale value corresponding to the given pixel. Only one of x or y is used:  for horizontal scales y is ignored, and for vertical scales x…"
+        },
+        {
+          "name": "identify",
+          "signature": "pathName identify x y",
+          "doc": "Returns a string indicating what part of the scale lies under the coordinates given by x and y. A return value of slider means that the point is over the slider;  trough1 means that the point is over the portion of the slider above  or to the left of the slider; and trough2 means that the point is o…"
+        },
+        {
+          "name": "set",
+          "signature": "pathName set value",
+          "doc": "This command is invoked to change the current value of the scale, and hence the position at which the slider is displayed.  Value gives the new value for the scale. The command has no effect if the scale is disabled."
+        }
+      ],
       "options": [
         {
           "flag": "-activebackground",
@@ -6182,6 +6826,48 @@
         "scrollbar pathName ?options?"
       ],
       "description": "The scrollbar command creates a new window (given by the pathName argument) and makes it into a scrollbar widget. Additional options, described above, may be specified on the command line or in the option database to configure aspects of the scrollbar such as its colors, orientation, and relief. The scrollbar command returns its pathName argument. At the time this command is invoked, there must not exist a window named pathName, but pathName's parent must exist. A scrollbar is a widget that displays two arrows, one at each end of the scrollbar, and a slider in the middle portion of the scrollbar.",
+      "subcommands": [
+        {
+          "name": "activate",
+          "signature": "pathName activate ?element?",
+          "doc": "Marks the element indicated by element as active, which causes it to be displayed as specified by the -activebackground and -activerelief options. The only element values understood by this command are arrow1, slider, or arrow2. If any other value is specified then no element of the scrollbar will b…"
+        },
+        {
+          "name": "cget",
+          "signature": "pathName cget option",
+          "doc": "Returns the current value of the configuration option given by option. Option may have any of the values accepted by the scrollbar command."
+        },
+        {
+          "name": "configure",
+          "signature": "pathName configure ?option? ?value option value ...?",
+          "doc": "Query or modify the configuration options of the widget. If no option is specified, returns a list describing all of the available options for pathName (see Tk_ConfigureInfo for information on the format of this list).  If option is specified with no value, then the command returns a list describing…"
+        },
+        {
+          "name": "delta",
+          "signature": "pathName delta deltaX deltaY",
+          "doc": "Returns a real number indicating the fractional change in the scrollbar setting that corresponds to a given change in slider position.  For example, if the scrollbar is horizontal, the result indicates how much the scrollbar setting must change to move the slider deltaX pixels to the right (deltaY i…"
+        },
+        {
+          "name": "fraction",
+          "signature": "pathName fraction x y",
+          "doc": "Returns a real number between 0 and 1 indicating where the point given by x and y lies in the trough area of the scrollbar. The value 0 corresponds to the top or left of the trough, the value 1 corresponds to the bottom or right, 0.5 corresponds to the middle, and so on. X and y must be pixel coordi…"
+        },
+        {
+          "name": "get",
+          "signature": "pathName get",
+          "doc": "Returns the scrollbar settings in the form of a list whose elements are the arguments to the most recent set widget command."
+        },
+        {
+          "name": "identify",
+          "signature": "pathName identify x y",
+          "doc": "Returns the name of the element under the point given by x and y (such as arrow1), or an empty string if the point does not lie in any element of the scrollbar. X and y must be pixel coordinates relative to the scrollbar widget."
+        },
+        {
+          "name": "set",
+          "signature": "pathName set first last",
+          "doc": "This command is invoked by the scrollbar's associated widget to tell the scrollbar about the current view in the widget. The command takes two arguments, each of which is a real fraction between 0 and 1. The fractions describe the range of the document that is visible in the associated widget. For e…"
+        }
+      ],
       "options": [
         {
           "flag": "-activebackground",
@@ -6463,6 +7149,83 @@
         "spinbox pathName ?options?"
       ],
       "description": "The spinbox command creates a new window (given by the pathName argument) and makes it into a spinbox widget. Additional options, described above, may be specified on the command line or in the option database to configure aspects of the spinbox such as its colors, font, and relief.  The spinbox command returns its pathName argument.  At the time this command is invoked, there must not exist a window named pathName, but pathName's parent must exist. A spinbox is an extended entry widget that allows he user to move, or spin, through a fixed set of ascending or descending values such as times or dates in addition to editing the value as in an",
+      "subcommands": [
+        {
+          "name": "bbox",
+          "signature": "pathName bbox index",
+          "doc": "Returns a list of four numbers describing the bounding box of the character given by index. The first two elements of the list give the x and y coordinates of the upper-left corner of the screen area covered by the character (in pixels relative to the widget) and the last two elements give the width…"
+        },
+        {
+          "name": "cget",
+          "signature": "pathName cget option",
+          "doc": "Returns the current value of the configuration option given by option. Option may have any of the values accepted by the spinbox command."
+        },
+        {
+          "name": "configure",
+          "signature": "pathName configure ?option? ?value option value ...?",
+          "doc": "Query or modify the configuration options of the widget. If no option is specified, returns a list describing all of the available options for pathName (see Tk_ConfigureInfo for information on the format of this list).  If option is specified with no value, then the command returns a list describing…"
+        },
+        {
+          "name": "delete",
+          "signature": "pathName delete first ?last?",
+          "doc": "Delete one or more elements of the spinbox. First is the index of the first character to delete, and last is the index of the character just after the last one to delete. If last is not specified it defaults to first+1, i.e. a single character is deleted. This command returns an empty string."
+        },
+        {
+          "name": "get",
+          "signature": "pathName get",
+          "doc": "Returns the spinbox's string."
+        },
+        {
+          "name": "icursor",
+          "signature": "pathName icursor index",
+          "doc": "Arrange for the insertion cursor to be displayed just before the character given by index.  Returns an empty string."
+        },
+        {
+          "name": "identify",
+          "signature": "pathName identify x y",
+          "doc": "Returns the name of the window element corresponding to coordinates x and y in the spinbox.  Return value is one of: none, buttondown, buttonup, entry."
+        },
+        {
+          "name": "index",
+          "signature": "pathName index index",
+          "doc": "Returns the numerical index corresponding to index."
+        },
+        {
+          "name": "insert",
+          "signature": "pathName insert index string",
+          "doc": "Insert the characters of string just before the character indicated by index.  Returns an empty string."
+        },
+        {
+          "name": "invoke",
+          "signature": "pathName invoke element",
+          "doc": "Causes the specified element, either buttondown or buttonup, to be invoked, triggering the action associated with it."
+        },
+        {
+          "name": "scan",
+          "signature": "pathName scan option args",
+          "doc": "This command is used to implement scanning on spinboxes.  It has two forms, depending on option:"
+        },
+        {
+          "name": "selection",
+          "signature": "pathName selection option arg",
+          "doc": "This command is used to adjust the selection within a spinbox.  It has several forms, depending on option:"
+        },
+        {
+          "name": "set",
+          "signature": "pathName set ?string?",
+          "doc": "If string is specified, the spinbox will try and set it to this value, otherwise it just returns the spinbox's string. If validation is on, it will occur when setting the string."
+        },
+        {
+          "name": "validate",
+          "signature": "pathName validate",
+          "doc": "This command is used to force an evaluation of the -validatecommand independent of the conditions specified by the -validate option. This is done by temporarily setting the -validate option to all. It returns 0 or 1."
+        },
+        {
+          "name": "xview",
+          "signature": "pathName xview args",
+          "doc": "This command is used to query and change the horizontal position of the text in the widget's window.  It can take any of the following forms:"
+        }
+      ],
       "options": [
         {
           "flag": "-activebackground",
@@ -6986,6 +7749,138 @@
         "tk_textPaste pathName"
       ],
       "description": "The text command creates a new window (given by the pathName argument) and makes it into a text widget. Additional options, described above, may be specified on the command line or in the option database to configure aspects of the text such as its default background color and relief. The text command returns the path name of the new window. A text widget displays one or more lines of text and allows that text to be edited. Text widgets support four different kinds of annotations on the text, called tags, marks, embedded windows or embedded images. Tags allow different portions of the text to be displayed with different fonts and colors. In",
+      "subcommands": [
+        {
+          "name": "bbox",
+          "signature": "pathName bbox index",
+          "doc": "Returns a list of four elements describing the screen area of the character given by index. The first two elements of the list give the x and y coordinates of the upper-left corner of the area occupied by the character, and the last two elements give the width and height of the area. If the characte…"
+        },
+        {
+          "name": "cget",
+          "signature": "pathName cget option",
+          "doc": "Returns the current value of the configuration option given by option. Option may have any of the values accepted by the text command."
+        },
+        {
+          "name": "compare",
+          "signature": "pathName compare index1 op index2",
+          "doc": "Compares the indices given by index1 and index2 according to the relational operator given by op, and returns 1 if the relationship is satisfied and 0 if it is not. Op must be one of the operators <, <=, ==, >=, >, or !=. If op is == then 1 is returned if the two indices refer to the same character,…"
+        },
+        {
+          "name": "configure",
+          "signature": "pathName configure ?option? ?value option value ...?",
+          "doc": "Query or modify the configuration options of the widget. If no option is specified, returns a list describing all of the available options for pathName (see Tk_ConfigureInfo for information on the format of this list). If option is specified with no value, then the command returns a list describing…"
+        },
+        {
+          "name": "count",
+          "signature": "pathName count ?options? index1 index2",
+          "doc": "Counts the number of relevant things between the two indices. If index1 is after index2, the result will be a negative number (and this holds for each of the possible options). The actual items which are counted depend on the options given. The result is a list of integers, one for the result of eac…"
+        },
+        {
+          "name": "debug",
+          "signature": "pathName debug ?boolean?",
+          "doc": "If boolean is specified, then it must have one of the true or false values accepted by Tcl_GetBoolean. If the value is a true one then internal consistency checks will be turned on in the B-tree code associated with text widgets. If boolean has a false value then the debugging checks will be turned…"
+        },
+        {
+          "name": "delete",
+          "signature": "pathName delete index1 ?index2 ...?",
+          "doc": "Delete a range of characters from the text. If both index1 and index2 are specified, then delete all the characters starting with the one given by index1 and stopping just before index2 (i.e. the character at index2 is not deleted). If index2 does not specify a position later in the text than index1…"
+        },
+        {
+          "name": "dlineinfo",
+          "signature": "pathName dlineinfo index",
+          "doc": "Returns a list with five elements describing the area occupied by the display line containing index. The first two elements of the list give the x and y coordinates of the upper-left corner of the area occupied by the line, the third and fourth elements give the width and height of the area, and the…"
+        },
+        {
+          "name": "dump",
+          "signature": "pathName dump ?switches? index1 ?index2?",
+          "doc": "Return the contents of the text widget from index1 up to, but not including index2, including the text and information about marks, tags, and embedded windows. If index2 is not specified, then it defaults to one character past index1. The information is returned in the following format: key1 value1…"
+        },
+        {
+          "name": "edit",
+          "signature": "pathName edit option ?arg arg ...?",
+          "doc": "This command controls the undo mechanism and the modified flag. The exact behavior of the command depends on the option argument that follows the edit argument. The following forms of the command are currently supported:"
+        },
+        {
+          "name": "get",
+          "signature": "pathName get ?-displaychars? ?--? index1 ?index2 ...?",
+          "doc": "Return a range of characters from the text. The return value will be all the characters in the text starting with the one whose index is index1 and ending just before the one whose index is index2 (the character at index2 will not be returned). If index2 is omitted then the single character at index…"
+        },
+        {
+          "name": "image",
+          "signature": "pathName image option ?arg arg ...?",
+          "doc": "This command is used to manipulate embedded images. The behavior of the command depends on the option argument that follows the image argument. The following forms of the command are currently supported:"
+        },
+        {
+          "name": "index",
+          "signature": "pathName index index",
+          "doc": "Returns the position corresponding to index in the form line.char where line is the line number and char is the character number. Index may have any of the forms described under INDICES above."
+        },
+        {
+          "name": "insert",
+          "signature": "pathName insert index chars ?tagList chars tagList ...?",
+          "doc": "Inserts all of the chars arguments just before the character at index. If index refers to the end of the text (the character after the last newline) then the new text is inserted just before the last newline instead. If there is a single chars argument and no tagList, then the new text will receive…"
+        },
+        {
+          "name": "mark",
+          "signature": "pathName mark option ?arg arg ...?",
+          "doc": "This command is used to manipulate marks. The exact behavior of the command depends on the option argument that follows the mark argument. The following forms of the command are currently supported:"
+        },
+        {
+          "name": "peer",
+          "signature": "pathName peer option args",
+          "doc": "This command is used to create and query widget peers. It has two forms, depending on option:"
+        },
+        {
+          "name": "pendingsync",
+          "signature": "pathName pendingsync",
+          "doc": "Returns 1 if the line heights calculations are not up-to-date, 0 otherwise."
+        },
+        {
+          "name": "replace",
+          "signature": "pathName replace index1 index2 chars ?tagList chars tagList ...?",
+          "doc": "Replaces the range of characters between index1 and index2 with the given characters and tags.  See the section on pathName insert for an explanation of the handling of the tagList... arguments, and the section on pathName delete for an explanation of the handling of the indices.  If index2 correspo…"
+        },
+        {
+          "name": "scan",
+          "signature": "pathName scan option args",
+          "doc": "This command is used to implement scanning on texts. It has two forms, depending on option:"
+        },
+        {
+          "name": "search",
+          "signature": "pathName search ?switches? pattern index ?stopIndex?",
+          "doc": "Searches the text in pathName starting at index for a range of characters that matches pattern. If a match is found, the index of the first character in the match is returned as result; otherwise an empty string is returned. One or more of the following switches (or abbreviations thereof) may be spe…"
+        },
+        {
+          "name": "see",
+          "signature": "pathName see index",
+          "doc": "Adjusts the view in the window so that the character given by index is completely visible. If index is already visible then the command does nothing. If index is a short distance out of view, the command adjusts the view just enough to make index visible at the edge of the window. If index is far ou…"
+        },
+        {
+          "name": "sync",
+          "signature": "pathName sync ?-command command?",
+          "doc": "Controls the synchronization of the view of the text widget."
+        },
+        {
+          "name": "tag",
+          "signature": "pathName tag option ?arg arg ...?",
+          "doc": "This command is used to manipulate tags. The exact behavior of the command depends on the option argument that follows the tag argument. The following forms of the command are currently supported:"
+        },
+        {
+          "name": "window",
+          "signature": "pathName window option ?arg arg ...?",
+          "doc": "This command is used to manipulate embedded windows. The behavior of the command depends on the option argument that follows the window argument. The following forms of the command are currently supported:"
+        },
+        {
+          "name": "xview",
+          "signature": "pathName xview option args",
+          "doc": "This command is used to query and change the horizontal position of the text in the widget's window. It can take any of the following forms:"
+        },
+        {
+          "name": "yview",
+          "signature": "pathName yview ?args?",
+          "doc": "This command is used to query and change the vertical position of the text in the widget's window. It can take any of the following forms:"
+        }
+      ],
       "options": [
         {
           "flag": "-autoseparators",
@@ -7529,6 +8424,18 @@
         "toplevel pathName ?options?"
       ],
       "description": "The toplevel command creates a new toplevel widget (given by the pathName argument).  Additional options, described above, may be specified on the command line or in the option database to configure aspects of the toplevel such as its background color and relief.  The toplevel command returns the path name of the new window. A toplevel is similar to a frame except that it is created as a top-level window:  its X parent is the root window of a screen rather than the logical parent from its Tk path name.  The primary purpose of a toplevel is to serve as a container for dialog boxes and other collections of widgets.  The only visible features",
+      "subcommands": [
+        {
+          "name": "cget",
+          "signature": "pathName cget option",
+          "doc": "Returns the current value of the configuration option given by option. Option may have any of the values accepted by the toplevel command."
+        },
+        {
+          "name": "configure",
+          "signature": "pathName configure ?option? ?value option value ...?",
+          "doc": "Query or modify the configuration options of the widget. If no option is specified, returns a list describing all of the available options for pathName (see Tk_ConfigureInfo for information on the format of this list).  If option is specified with no value, then the command returns a list describing…"
+        }
+      ],
       "options": [
         {
           "flag": "-background",
@@ -7732,7 +8639,14 @@
       "synopsis": [
         "ttk::button pathName ?options?"
       ],
-      "description": "A ttk::button widget displays a textual label and/or image, and evaluates a command when pressed.",
+      "description": "A ttk::button widget displays a textual label and/or image, and evaluates a command when pressed. In addition to the standard cget, configure, identify, instate, and state commands, buttons support the following additional widget commands:",
+      "subcommands": [
+        {
+          "name": "invoke",
+          "signature": "pathName invoke",
+          "doc": "Invokes the command associated with the button."
+        }
+      ],
       "options": [
         {
           "flag": "-class",
@@ -7832,7 +8746,7 @@
       "synopsis": [
         "ttk::checkbutton pathName ?options?"
       ],
-      "description": "A ttk::checkbutton widget is used to show or change a setting. It has two states, selected and deselected. The state of the checkbutton may be linked to a Tcl variable.",
+      "description": "A ttk::checkbutton widget is used to show or change a setting. It has two states, selected and deselected. The state of the checkbutton may be linked to a Tcl variable. In addition to the standard cget, configure, identify, instate, and state commands, checkbuttons support the following additional widget commands: Toggles between the selected and deselected states and evaluates the associated -command. If the widget is currently selected, sets the -variable to the -offvalue and deselects the widget; otherwise, sets the -variable to the -onvalue Returns the result of the -command.",
       "options": [
         {
           "flag": "-class",
@@ -7944,7 +8858,24 @@
       "synopsis": [
         "ttk::combobox pathName ?options?"
       ],
-      "description": "A ttk::combobox combines a text field with a pop-down list of values; the user may select the value of the text field from among the values in the list.",
+      "description": "A ttk::combobox combines a text field with a pop-down list of values; the user may select the value of the text field from among the values in the list. The following subcommands are possible for combobox widgets:",
+      "subcommands": [
+        {
+          "name": "current",
+          "signature": "pathName current ?newIndex?",
+          "doc": "If newIndex is supplied, sets the combobox value to the element at position newIndex in the list of -values (in addition to integers, the end index is supported and indicates the last element of the list). Otherwise, returns the index of the current value in the list of -values or -1 if the current…"
+        },
+        {
+          "name": "get",
+          "signature": "pathName get",
+          "doc": "Returns the current value of the combobox."
+        },
+        {
+          "name": "set",
+          "signature": "pathName set value",
+          "doc": "Sets the value of the combobox to value. The combobox widget also supports the following ttk::entry widget subcommands (see ttk::entry(n) for details): bbox\tdelete\ticursor index\tinsert\tselection xview The combobox widget also supports the following generic ttk::widget widget subcommands (see ttk::wi…"
+        }
+      ],
       "options": [
         {
           "flag": "-class",
@@ -8031,7 +8962,49 @@
       "synopsis": [
         "ttk::entry pathName ?options?"
       ],
-      "description": "An ttk::entry widget displays a one-line text string and allows that string to be edited by the user. The value of the string may be linked to a Tcl variable with the -textvariable option. Entry widgets support horizontal scrolling with the standard -xscrollcommand option and xview widget command.",
+      "description": "An ttk::entry widget displays a one-line text string and allows that string to be edited by the user. The value of the string may be linked to a Tcl variable with the -textvariable option. Entry widgets support horizontal scrolling with the standard -xscrollcommand option and xview widget command. The following subcommands are possible for entry widgets:",
+      "subcommands": [
+        {
+          "name": "bbox",
+          "signature": "pathName bbox index",
+          "doc": "Returns a list of four numbers describing the bounding box of the character given by index. The first two elements of the list give the x and y coordinates of the upper-left corner of the screen area covered by the character (in pixels relative to the widget) and the last two elements give the width…"
+        },
+        {
+          "name": "delete",
+          "signature": "pathName delete first ?last?",
+          "doc": "Delete one or more elements of the entry. First is the index of the first character to delete, and last is the index of the character just after the last one to delete. If last is not specified it defaults to first+1, i.e. a single character is deleted. This command returns the empty string."
+        },
+        {
+          "name": "get",
+          "signature": "pathName get",
+          "doc": "Returns the entry's string."
+        },
+        {
+          "name": "icursor",
+          "signature": "pathName icursor index",
+          "doc": "Arrange for the insert cursor to be displayed just before the character given by index.  Returns the empty string."
+        },
+        {
+          "name": "index",
+          "signature": "pathName index index",
+          "doc": "Returns the numerical index corresponding to index."
+        },
+        {
+          "name": "insert",
+          "signature": "pathName insert index string",
+          "doc": "Insert string just before the character indicated by index.  Returns the empty string."
+        },
+        {
+          "name": "selection",
+          "signature": "pathName selection option arg",
+          "doc": "This command is used to adjust the selection within an entry.  It has several forms, depending on option:"
+        },
+        {
+          "name": "validate",
+          "signature": "pathName validate",
+          "doc": "Force revalidation, independent of the conditions specified by the -validate option. Returns 0 if validation fails, 1 if it succeeds. Sets or clears the invalid state accordingly. See VALIDATION below for more details. The entry widget also supports the following generic ttk::widget widget subcomman…"
+        }
+      ],
       "options": [
         {
           "flag": "-class",
@@ -8157,7 +9130,7 @@
       "synopsis": [
         "ttk::frame pathName ?options?"
       ],
-      "description": "A ttk::frame widget is a container, used to group other widgets together.",
+      "description": "A ttk::frame widget is a container, used to group other widgets together. Supports the standard widget commands configure, cget, identify, instate, and state; see ttk::widget(n).",
       "options": [
         {
           "flag": "-bd",
@@ -8238,7 +9211,7 @@
       "synopsis": [
         "ttk::label pathName ?options?"
       ],
-      "description": "A ttk::label widget displays a textual label and/or image. The label may be linked to a Tcl variable to automatically change the displayed text.",
+      "description": "A ttk::label widget displays a textual label and/or image. The label may be linked to a Tcl variable to automatically change the displayed text. Supports the standard widget commands configure, cget, identify, instate, and state; see ttk::widget(n).",
       "options": [
         {
           "flag": "-anchor",
@@ -8375,7 +9348,7 @@
       "synopsis": [
         "ttk::labelframe pathName ?options?"
       ],
-      "description": "A ttk::labelframe widget is a container used to group other widgets together.  It has an optional label, which may be a plain text string or another widget.",
+      "description": "A ttk::labelframe widget is a container used to group other widgets together.  It has an optional label, which may be a plain text string or another widget. Supports the standard widget commands configure, cget, identify, instate, and state; see ttk::widget(n).",
       "options": [
         {
           "flag": "-class",
@@ -8457,7 +9430,7 @@
       "synopsis": [
         "ttk::menubutton pathName ?options?"
       ],
-      "description": "A ttk::menubutton widget displays a textual label and/or image, and displays a menu when pressed.",
+      "description": "A ttk::menubutton widget displays a textual label and/or image, and displays a menu when pressed. Menubutton widgets support the standard cget, configure, identify, instate, and state methods.  No other widget methods are used.",
       "options": [
         {
           "flag": "-class",
@@ -8559,7 +9532,7 @@
         "pathname add window ?options...?",
         "pathname insert index window ?options...?"
       ],
-      "description": "A ttk::notebook widget manages a collection of windows and displays a single one at a time. Each content window is associated with a tab, which the user may select to change the currently-displayed window.",
+      "description": "A ttk::notebook widget manages a collection of windows and displays a single one at a time. Each content window is associated with a tab, which the user may select to change the currently-displayed window. Adds a new tab to the notebook. See TAB OPTIONS for the list of available options. If window is currently managed by the notebook but hidden, it is restored to its previous position. See ttk::widget(n). See ttk::widget(n). Removes the tab specified by tabid, unmaps and unmanages the associated window. Hides the tab specified by tabid. The tab will not be displayed, but the associated window remains managed by the notebook and its configuration remembered.",
       "options": [
         {
           "flag": "-class",
@@ -8654,7 +9627,7 @@
         "pathname add window ?options...?",
         "pathname insert index window ?options...?"
       ],
-      "description": "A ttk::panedwindow widget displays a number of subwindows, stacked either vertically or horizontally. The user may adjust the relative sizes of the subwindows by dragging the sash between panes.",
+      "description": "A ttk::panedwindow widget displays a number of subwindows, stacked either vertically or horizontally. The user may adjust the relative sizes of the subwindows by dragging the sash between panes. Supports the standard configure, cget, state, and instate commands; see ttk::widget(n) for details. Additional commands: Adds a new pane to the window. See PANE OPTIONS for the list of available options. Removes the specified subpane from the widget. pane is either an integer index or the name of a managed subwindow. Returns the name of the element under the point given by x and y, or the empty string if no component is present at that location.",
       "options": [
         {
           "flag": "-class",
@@ -8718,6 +9691,48 @@
         "ttk::progressbar pathName ?options?"
       ],
       "description": "A ttk::progressbar widget shows the status of a long-running operation.  They can operate in two modes: determinate mode shows the amount completed relative to the total amount of work to be done, and indeterminate mode provides an animated display to let the user know that something is happening.",
+      "subcommands": [
+        {
+          "name": "cget",
+          "signature": "pathName cget option",
+          "doc": "Returns the current value of the specified option; see ttk::widget(n)."
+        },
+        {
+          "name": "configure",
+          "signature": "pathName configure ?option? ?value option value ...?",
+          "doc": "Modify or query widget options; see ttk::widget(n)."
+        },
+        {
+          "name": "identify",
+          "signature": "pathName identify x y",
+          "doc": "Returns the name of the element at position x, y. See ttk::widget(n)."
+        },
+        {
+          "name": "instate",
+          "signature": "pathName instate statespec ?script?",
+          "doc": "Test the widget state; see ttk::widget(n)."
+        },
+        {
+          "name": "start",
+          "signature": "pathName start ?interval?",
+          "doc": "Begin autoincrement mode: schedules a recurring timer event that calls step every interval milliseconds. If omitted, interval defaults to 50 milliseconds (20 steps/second)."
+        },
+        {
+          "name": "state",
+          "signature": "pathName state ?stateSpec?",
+          "doc": "Modify or query the widget state; see ttk::widget(n)."
+        },
+        {
+          "name": "step",
+          "signature": "pathName step ?amount?",
+          "doc": "Increments the -value by amount. amount defaults to 1.0 if omitted."
+        },
+        {
+          "name": "stop",
+          "signature": "pathName stop",
+          "doc": "Stop autoincrement mode: cancels any recurring timer event initiated by pathName start."
+        }
+      ],
       "options": [
         {
           "flag": "-class",
@@ -8798,7 +9813,7 @@
       "synopsis": [
         "ttk::radiobutton pathName ?options?"
       ],
-      "description": "ttk::radiobutton widgets are used in groups to show or change a set of mutually-exclusive options. Radiobuttons are linked to a Tcl variable, and have an associated value; when a radiobutton is clicked, it sets the variable to its associated value.",
+      "description": "ttk::radiobutton widgets are used in groups to show or change a set of mutually-exclusive options. Radiobuttons are linked to a Tcl variable, and have an associated value; when a radiobutton is clicked, it sets the variable to its associated value. In addition to the standard cget, configure, identify, instate, and state commands, radiobuttons support the following additional widget commands: Sets the -variable to the -value, selects the widget, and evaluates the associated -command. Returns the result of the -command, or the empty string if no -command is specified.",
       "options": [
         {
           "flag": "-class",
@@ -8905,6 +9920,43 @@
         "ttk::scale pathName ?options...?"
       ],
       "description": "A ttk::scale widget is typically used to control the numeric value of a linked variable that varies uniformly over some range. A scale displays a slider that can be moved along over a trough, with the relative position of the slider over the trough indicating the value of the variable.",
+      "subcommands": [
+        {
+          "name": "cget",
+          "signature": "pathName cget option",
+          "doc": "Returns the current value of the specified option; see ttk::widget(n)."
+        },
+        {
+          "name": "configure",
+          "signature": "pathName configure ?option? ?value option value ...?",
+          "doc": "Modify or query widget options; see ttk::widget(n)."
+        },
+        {
+          "name": "get",
+          "signature": "pathName get ?x y?",
+          "doc": "Get the current value of the -value option, or the value corresponding to the coordinates x,y if they are specified. X and y are pixel coordinates relative to the scale widget origin."
+        },
+        {
+          "name": "identify",
+          "signature": "pathName identify x y",
+          "doc": "Returns the name of the element at position x, y. See ttk::widget(n)."
+        },
+        {
+          "name": "instate",
+          "signature": "pathName instate statespec ?script?",
+          "doc": "Test the widget state; see ttk::widget(n)."
+        },
+        {
+          "name": "set",
+          "signature": "pathName set value",
+          "doc": "Set the value of the widget (i.e. the -value option) to value. The value will be clipped to the range given by the -from and -to options. Note that setting the linked variable (i.e. the variable named in the -variable option) does not cause such clipping."
+        },
+        {
+          "name": "state",
+          "signature": "pathName state ?stateSpec?",
+          "doc": "Modify or query the widget state; see ttk::widget(n)."
+        }
+      ],
       "options": [
         {
           "flag": "-class",
@@ -8986,6 +10038,43 @@
         "ttk::scrollbar pathName ?options...?"
       ],
       "description": "ttk::scrollbar widgets are typically linked to an associated window that displays a document of some sort, such as a file being edited or a drawing. A scrollbar displays a thumb in the middle portion of the scrollbar, whose position and size provides information about the portion of the document visible in the associated window. The thumb may be dragged by the user to control the visible region. Depending on the theme, two or more arrow buttons may also be present; these are used to scroll the visible region in discrete units.",
+      "subcommands": [
+        {
+          "name": "cget",
+          "signature": "pathName cget option",
+          "doc": "Returns the current value of the specified option; see ttk::widget(n)."
+        },
+        {
+          "name": "configure",
+          "signature": "pathName configure ?option? ?value option value ...?",
+          "doc": "Modify or query widget options; see ttk::widget(n)."
+        },
+        {
+          "name": "get",
+          "signature": "pathName get",
+          "doc": "Returns the scrollbar settings in the form of a list whose elements are the arguments to the most recent set widget command."
+        },
+        {
+          "name": "identify",
+          "signature": "pathName identify x y",
+          "doc": "Returns the name of the element at position x, y. See ttk::widget(n)."
+        },
+        {
+          "name": "instate",
+          "signature": "pathName instate statespec ?script?",
+          "doc": "Test the widget state; see ttk::widget(n)."
+        },
+        {
+          "name": "set",
+          "signature": "pathName set first last",
+          "doc": "This command is normally invoked by the scrollbar's associated widget from an -xscrollcommand or -yscrollcommand callback. Specifies the visible range to be displayed. first and last are real fractions between 0 and 1."
+        },
+        {
+          "name": "state",
+          "signature": "pathName state ?stateSpec?",
+          "doc": "Modify or query the widget state; see ttk::widget(n)."
+        }
+      ],
       "options": [
         {
           "flag": "-class",
@@ -9036,7 +10125,7 @@
       "synopsis": [
         "ttk::separator pathName ?options?"
       ],
-      "description": "A ttk::separator widget displays a horizontal or vertical separator bar.",
+      "description": "A ttk::separator widget displays a horizontal or vertical separator bar. Separator widgets support the standard cget, configure, identify, instate, and state methods.  No other widget methods are used.",
       "options": [
         {
           "flag": "-class",
@@ -9081,7 +10170,7 @@
       "synopsis": [
         "ttk::sizegrip pathName ?options?"
       ],
-      "description": "A ttk::sizegrip widget (also known as a grow box) allows the user to resize the containing toplevel window by pressing and dragging the grip.",
+      "description": "A ttk::sizegrip widget (also known as a grow box) allows the user to resize the containing toplevel window by pressing and dragging the grip. Sizegrip widgets support the standard cget, configure, identify, instate, and state methods.  No other widget methods are used.",
       "options": [
         {
           "flag": "-class",
@@ -9120,7 +10209,19 @@
       "synopsis": [
         "ttk::spinbox pathName ?options?"
       ],
-      "description": "A ttk::spinbox widget is a ttk::entry widget with built-in up and down buttons that are used to either modify a numeric value or to select among a set of values. The widget implements all the features of the ttk::entry widget including support of the -textvariable option to link the value displayed by the widget to a Tcl variable.",
+      "description": "A ttk::spinbox widget is a ttk::entry widget with built-in up and down buttons that are used to either modify a numeric value or to select among a set of values. The widget implements all the features of the ttk::entry widget including support of the -textvariable option to link the value displayed by the widget to a Tcl variable. The following subcommands are possible for spinbox widgets in addition to the commands described for the ttk::entry widget:",
+      "subcommands": [
+        {
+          "name": "get",
+          "signature": "pathName get",
+          "doc": "Returns the spinbox's current value."
+        },
+        {
+          "name": "set",
+          "signature": "pathName set value",
+          "doc": "Set the spinbox string to value. If a -format option has been configured then this format will be applied. If formatting fails or is not set or the -values option has been used then the value is set directly."
+        }
+      ],
       "options": [
         {
           "flag": "-class",
@@ -9261,6 +10362,12 @@
         "ttk::treeview pathname ?options?"
       ],
       "description": "The ttk::treeview widget displays a hierarchical collection of items. Each item has a textual label, an optional image, and an optional list of data values. The data values are displayed in successive columns after the tree label. The order in which data values are displayed may be controlled by setting the -displaycolumns widget option. The tree widget can also display column headings. Columns may be accessed by number or by symbolic names listed in the -columns widget option; see COLUMN IDENTIFIERS. Each item is identified by a unique name. The widget will generate item IDs if they are not supplied by the caller.",
+      "subcommands": [
+        {
+          "name": "tag",
+          "signature": "pathName tag args..."
+        }
+      ],
       "options": [
         {
           "flag": "-class",

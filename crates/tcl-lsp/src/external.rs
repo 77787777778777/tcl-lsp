@@ -143,6 +143,30 @@ pub fn build_header_db(
     }
 }
 
+/// Syntax entries for the host application's own commands, written as a small
+/// companion database so nagelfar knows them.
+///
+/// A plugin speaks its host's API: `veles::call_llm`, `veles::json_get`,
+/// `veles::hook`. Those are registered at runtime by the Rust core
+/// (`Tcl_CreateObjCommand`), invisible to any static analyser, so nagelfar
+/// flags every call with "Unknown command" — pure noise under real code.
+/// The entries are the same shape the builtin db uses; `{x x?}`-style means
+/// "known command, arbitrary word-shaped args".
+pub const HOST_COMMAND_DB: &str = r#"# Host-application commands (veles-agent core, registered at runtime).
+set ::syntax(veles::call_llm) {x x x? x?}
+set ::syntax(veles::json_get) {x x x*}
+set ::syntax(veles::hook) {x x}
+set ::syntax(veles::routes) 1
+"#;
+
+/// Writes [`HOST_COMMAND_DB`] to `out_path`, returning whether it landed.
+/// A failure is not fatal — the linter just keeps flagging host commands.
+pub fn write_host_command_db(out_path: &std::path::Path) -> bool {
+    std::fs::write(out_path, HOST_COMMAND_DB)
+        .map(|_| out_path.metadata().map(|m| m.len() > 0).unwrap_or(false))
+        .unwrap_or(false)
+}
+
 fn parse_nagelfar_line(line: &str) -> Option<Finding> {
     // `<file>: <line>: <S> <message>`
     let (_, rest) = line.split_once(": ")?;

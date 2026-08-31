@@ -314,6 +314,10 @@ fn parse_page(text: &str, package: &str) -> Option<(Command, Option<Inherited>)>
                 "NAME" => Section::Name,
                 "SYNOPSIS" => Section::Synopsis,
                 "DESCRIPTION" => Section::Description,
+                // Widget pages document their subcommands under this heading:
+                // `.TP` rows of `pathName <sub> ...` + prose. Those are exactly
+                // what a hover on a `$w insert` dispatch word wants to show.
+                "WIDGET COMMAND" => Section::Description,
                 _ => Section::Other,
             };
             continue;
@@ -397,21 +401,31 @@ fn parse_page(text: &str, package: &str) -> Option<(Command, Option<Inherited>)>
             want_tp_signature = false;
             let sig = clean(line);
             // A subcommand signature starts with the command name, e.g.
-            // `string cat ?string1?`. Anything else is ordinary prose.
-            if let Some(rest) = sig.strip_prefix(&format!("{} ", cmd.name)) {
-                if let Some(word) = rest.split_whitespace().next() {
-                    if word
-                        .chars()
-                        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-                        && !word.starts_with('?')
-                    {
-                        pending_tp = Some(Subcommand {
-                            name: word.to_string(),
-                            signature: sig,
-                            doc: String::new(),
-                        });
-                        continue;
-                    }
+            // `string cat ?string1?`. Widget pages instead write
+            // `pathName bbox index` — `pathName` is their stand-in for the
+            // widget's own name. Anything else is ordinary prose.
+            let path_prefix = format!("{} ", cmd.name);
+            let path_name_prefix = "pathName ".to_string();
+            let (from_name, rest) = if let Some(r) = sig.strip_prefix(&path_prefix) {
+                (true, r)
+            } else if let Some(r) = sig.strip_prefix(&path_name_prefix) {
+                (false, r)
+            } else {
+                continue;
+            };
+            if let Some(word) = rest.split_whitespace().next() {
+                if word
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+                    && !word.starts_with('?')
+                {
+                    let _ = from_name;
+                    pending_tp = Some(Subcommand {
+                        name: word.to_string(),
+                        signature: sig,
+                        doc: String::new(),
+                    });
+                    continue;
                 }
             }
             continue;

@@ -38,6 +38,10 @@ pub struct Server {
     /// Project syntax database (nagelfar `-header` of the workspace's Tcl
     /// files), layered under the builtin db so cross-file procs resolve.
     project_db: Option<String>,
+    /// Host-application command database (veles::call_llm and friends),
+    /// layered under the project db so plugin code is not flagged for
+    /// calling the API it runs against.
+    host_db: Option<String>,
 }
 
 pub fn run(connection: &Connection) -> Result<()> {
@@ -113,6 +117,14 @@ pub fn run(connection: &Connection) -> Result<()> {
         }
         None => None,
     };
+    // The host API db layers under the project db: a plugin calling
+    // `veles::call_llm` is calling a command the core registers at runtime,
+    // and "unknown" there is noise, not a finding.
+    let host_db = std::env::temp_dir()
+        .join(format!("tcl-lsp-db-{}", std::process::id()))
+        .join("host.db");
+    let host_db =
+        external::write_host_command_db(&host_db).then(|| host_db.to_string_lossy().to_string());
     let mut server = Server {
         docs: HashMap::new(),
         index: Index::new(),
@@ -120,6 +132,7 @@ pub fn run(connection: &Connection) -> Result<()> {
         config,
         encoding,
         project_db,
+        host_db,
     };
 
     // Index the workspace up front so definition and references work in files the
@@ -484,6 +497,9 @@ impl Server {
                 }
                 if let Some(p) = &self.project_db {
                     dbs.push(p.clone());
+                }
+                if let Some(h) = &self.host_db {
+                    dbs.push(h.clone());
                 }
                 findings.extend(external::nagelfar(doc.text(), exe, &dbs));
             }
@@ -914,11 +930,147 @@ impl Server {
         let head = head_span
             .and_then(|(s, e)| text.get(s..e).map(|s| s.to_string()))
             .unwrap_or_default();
-        Some(format!(
-            "**Widget command** `{sub}` dispatched on `{head}`.\n\nThe path is built at runtime, so the widget family (and thus the exact man \
-             page) is not statically known. `configure`/`cget`/`insert`/`delete`/`tag`/… are \
-             shared across Tk widgets; which options exist depends on the widget."
-        ))
+        Some(self.widget_command_markdown(&head, &sub))
+    }
+
+    /// Documentation for a widget-path dispatch (`$w insert end x`).
+    ///
+    /// The path is runtime-built, so the exact widget family is not statically
+    /// known — but the head often names it (`.log`, `.entry.field`,
+    /// `$tree`, a variable called `txt`), and when it does, the real man-page
+    /// documentation for that family's subcommand is shown. Otherwise the
+    /// subcommand is documented across the families that share it, with
+    /// pointers to the pages whose `.TP` entries describe it.
+    fn widget_command_markdown(&self, head: &str, sub: &str) -> String {
+        // Widgets whose subcommand sets are worth checking, in specificity
+        // order. `ttk::*` names its family directly; the classic pages too.
+        const WIDGETS: &[&str] = &[
+            "text",
+            "entry",
+            "listbox",
+            "canvas",
+            "menu",
+            "menubutton",
+            "ttk::treeview",
+            "ttk::combobox",
+            "ttk::notebook",
+            "ttk::spinbox",
+            "ttk::scale",
+            "ttk::progressbar",
+            "button",
+            "checkbutton",
+            "radiobutton",
+            "label",
+            "labelframe",
+            "frame",
+            "scrollbar",
+            "scale",
+            "spinbox",
+            "ttk::button",
+            "ttk::entry",
+            "ttk::frame",
+            "ttk::label",
+            "ttk::labelframe",
+            "ttk::menubutton",
+            "ttk::radiobutton",
+            "ttk::checkbutton",
+            "ttk::scrollbar",
+            "ttk::separator",
+            "ttk::sizegrip",
+        ];
+
+        // Guess the family from the head: the variable or path tail matched
+        // against the widget's own name (`txt`/`.log.text` → text,
+        // `$tree`/`.main.tv` → ttk::treeview). Short variable names are
+        // conventionally the widget's own name or an abbreviation of it.
+        let tail = head
+            .trim_start_matches('$')
+            .rsplit(['.', ':'])
+            .find(|s| !s.is_empty())
+            .unwrap_or("");
+        let lower = tail.to_ascii_lowercase();
+        let family_guess = WIDGETS.iter().find(|w| {
+            let short = w.rsplit("::").next().unwrap_or(w);
+            lower.contains(short) || short.starts_with(&lower) && lower.len() >= 2
+        });
+
+        // Which families document this subcommand at all? Their synopses
+        // carry `pathName <sub> ...` rows from the man pages.
+        let mut documenting: Vec<&str> = Vec::new();
+        let mut signature: Option<String> = None;
+        let mut doc_text: Option<String> = None;
+        for w in WIDGETS {
+            let Some(cmd) = self.kb.get(w) else {
+                continue;
+            };
+            // Widget subcommands come from two shapes the man pages use:
+            //   SYNOPSIS rows: `pathname insert index window ?options...?`
+            //   documented subcommand entries (`subcommands` from .TP rows)
+            let syn = cmd
+                .synopsis
+                .iter()
+                .find(|s| s.split_whitespace().nth(1) == Some(sub));
+            let sub_doc = cmd.subcommands.iter().find(|s| s.name == sub);
+            if syn.is_none() && sub_doc.is_none() {
+                continue;
+            }
+            documenting.push(w);
+            let head_is_this = family_guess == Some(w);
+            if signature.is_none() || head_is_this {
+                // The subcommand's own .TP entry (signature + prose) is the
+                // real documentation; the SYNOPSIS row is the fallback.
+                if let Some(sd) = sub_doc {
+                    signature = Some(sd.signature.clone());
+                    if !sd.doc.is_empty() {
+                        doc_text = Some(sd.doc.clone());
+                    } else if doc_text.is_none() && !cmd.description.is_empty() {
+                        doc_text = Some(cmd.description.clone());
+                    }
+                } else {
+                    signature = syn.cloned();
+                    if doc_text.is_none() && !cmd.description.is_empty() {
+                        doc_text = Some(cmd.description.clone());
+                    }
+                }
+            }
+        }
+
+        let mut md = format!("**Widget command** `{sub}` on `{head}`.\n");
+        if let Some(sig) = &signature {
+            md.push_str(&format!("\n```tcl\n{sig}\n```\n"));
+        }
+        match (family_guess, documenting.len()) {
+            (Some(f), _) => {
+                // A family is named; prefer ITS synopsis and doc (already
+                // selected above via head_is_this) and say so.
+                md.push_str(&format!(
+                    "\nPath tail matches [`{f}`]; that page's documentation follows.\n"
+                ));
+                if let Some(d) = &doc_text {
+                    md.push('\n');
+                    md.push_str(d);
+                    md.push('\n');
+                }
+            }
+            (_, 0) => {
+                md.push_str(&format!(
+                    "\nNo Tk widget man page documents `{sub}` as a widget subcommand. If the \
+                     head is an object handle (TclOO), see that class's `method {sub}` instead.\n"
+                ));
+            }
+            (_, n) => {
+                md.push_str(&format!(
+                    "\nDocumented as a subcommand on {n} widget pages: `{}`.\n",
+                    documenting.join("`, `")
+                ));
+                if let Some(d) = &doc_text {
+                    md.push('\n');
+                    md.push_str(d);
+                    md.push('\n');
+                }
+            }
+        }
+        md
     }
 
     fn completion(&self, p: &CompletionParams) -> serde_json::Value {
