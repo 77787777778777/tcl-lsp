@@ -866,8 +866,10 @@ impl Server {
         // definition — the widget command is built at runtime — but the
         // subcommand word still deserves a hover. Say what is known: it is a
         // widget command, on which path, and which of the classic Tk widget
-        // families document this subcommand.
-        if let Some(md) = self.widget_command_hover(&uri, p.text_document_position_params.position)
+        // families document this subcommand. Checked only when nothing in the
+        // workspace defines the word (see widget_command_hover's doc).
+        if let Some(md) =
+            self.widget_command_hover(&uri, p.text_document_position_params.position, &word, &ns)
         {
             return json(Hover {
                 contents: HoverContents::Markup(MarkupContent {
@@ -907,7 +909,26 @@ impl Server {
     /// Hover content for the subcommand word of a dynamic-head command
     /// (`$w.path insert end x` with the cursor on `insert`), or `None` when
     /// the position is not such a word.
-    fn widget_command_hover(&self, uri: &str, pos: Position) -> Option<String> {
+    ///
+    /// Deliberately LAST in hover's dispatch order: a dynamic head is also
+    /// how TclOO object methods are called (`$c bump 3`), and when the
+    /// workspace actually defines a matching method, the normal
+    /// index-resolution path already produces its signature and docstring.
+    /// This path only fires for words nothing in the workspace defines —
+    /// where the best available answer is Tk's widget documentation.
+    fn widget_command_hover(
+        &self,
+        uri: &str,
+        pos: Position,
+        word: &str,
+        ns: &str,
+    ) -> Option<String> {
+        // TclOO first: if a proc/method with this name is defined anywhere in
+        // the workspace, resolve() already found it and hover showed it. Only
+        // when it found NOTHING does the widget-doc fallback make sense.
+        if !self.index.resolve(word, ns).is_empty() {
+            return None;
+        }
         let doc = self.docs.get(uri)?;
         let offset = doc.line_index().offset(to_linepos(pos), self.encoding);
         let text = doc.text();
@@ -922,6 +943,9 @@ impl Server {
             return None; // hover only makes sense on the dispatch word itself
         }
         let sub = word_at(text, offset)?;
+        if sub != word {
+            return None;
+        }
         let head_span = enclosing.command.words().first().and_then(|w| {
             w.first()
                 .map(|t| t.range().start)
@@ -2478,6 +2502,73 @@ where
 mod tests {
     use super::*;
     use tcl_syntax::{outline, Script};
+
+    /// A server with exactly one indexed/opened document, for testing the
+    /// hover dispatch paths that consult both the index and the Tk docs.
+    fn server_with(uri: &str, text: &str) -> Server {
+        let mut index = Index::new();
+        index.set_file(uri, text);
+        let mut docs = HashMap::new();
+        docs.insert(uri.to_string(), Document::new(text.to_string(), 1));
+        Server {
+            docs,
+            index,
+            kb: kb::builtin(kb::Target::Tcl86),
+            config: Config::default(),
+            encoding: PositionEncoding::Utf8,
+            project_db: None,
+            host_db: None,
+        }
+    }
+
+    fn pos_at(text: &str, uri_needle: &str, line_index: &LineIndex, needle: &str) -> Position {
+        let base = text.find(uri_needle).unwrap();
+        let at = base + text[base..].find(needle).unwrap();
+        to_position(line_index, at, PositionEncoding::Utf8)
+    }
+
+    #[test]
+    fn widget_hover_defers_to_a_workspace_defined_method() {
+        // `$c bump 3` dispatches on a dynamic head like a widget path does,
+        // but `bump` IS defined here (a TclOO method). Hover must show the
+        // method, not the Tk widget fallback — that was a regression.
+        let text = "oo::class create Counter {\n    method bump {by} { return 1 }\n}\nset c [Counter new]\n$c bump 3\n";
+        let uri = "file:///prio.tcl";
+        let s = server_with(uri, text);
+        let li = s.docs.get(uri).unwrap().line_index();
+        let p = pos_at(text, "$c", li, "bump");
+        assert!(
+            s.widget_command_hover(uri, p, "bump", "::").is_none(),
+            "a workspace-defined name must not fall through to widget docs"
+        );
+    }
+
+    #[test]
+    fn widget_hover_documents_a_real_widget_subcommand() {
+        let text = "set log .main.f.log\n$log.text insert end hi\n";
+        let uri = "file:///prio2.tcl";
+        let s = server_with(uri, text);
+        let li = s.docs.get(uri).unwrap().line_index();
+        let p = pos_at(text, "$log", li, "insert");
+        let md = s
+            .widget_command_hover(uri, p, "insert", "::")
+            .expect("`insert` is documented as a text-widget subcommand");
+        assert!(md.contains("pathName insert index chars"), "{md}");
+        assert!(md.contains("Inserts all of the"), "{md}");
+    }
+
+    #[test]
+    fn widget_hover_declares_unknown_subcommands() {
+        let text = "set w .top\n$w frobnicate x\n";
+        let uri = "file:///prio3.tcl";
+        let s = server_with(uri, text);
+        let li = s.docs.get(uri).unwrap().line_index();
+        let p = pos_at(text, "$w", li, "frobnicate");
+        let md = s
+            .widget_command_hover(uri, p, "frobnicate", "::")
+            .expect("a dispatch word always gets a hover");
+        assert!(md.contains("No Tk widget man page"), "{md}");
+    }
 
     #[test]
     fn word_at_includes_namespace_qualifiers() {
