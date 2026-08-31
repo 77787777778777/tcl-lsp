@@ -12,6 +12,7 @@ mod config;
 mod external;
 mod semantic;
 mod server;
+mod transport;
 
 use anyhow::Result;
 
@@ -19,12 +20,14 @@ fn main() -> Result<()> {
     // stderr, never stdout.
     eprintln!("tcl-lsp {} starting", env!("CARGO_PKG_VERSION"));
 
-    let (connection, io_threads) = lsp_server::Connection::stdio();
+    // Our transport, not `lsp_server::Connection::stdio`: one malformed
+    // frame must not take the process down. See transport.rs.
+    let connection = transport::stdio_connection();
     let result = server::run(&connection);
 
-    // Always join the IO threads so the process exits cleanly even on error.
+    // Dropping the Connection's sender ends the writer thread; the reader
+    // stops when stdin hits EOF (the editor's side of the pipe closing).
     drop(connection);
-    io_threads.join()?;
     result?;
     eprintln!("tcl-lsp exiting");
     Ok(())

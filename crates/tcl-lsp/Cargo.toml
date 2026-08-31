@@ -21,3 +21,4 @@ serde.workspace = true
 serde_json.workspace = true
 lsp-server = "0.10"
 lsp-types = "0.97"
+crossbeam-channel = "0.5"
