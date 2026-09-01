@@ -965,10 +965,24 @@ impl Server {
         word: &str,
         ns: &str,
     ) -> Option<String> {
-        // TclOO first: if a proc/method with this name is defined anywhere in
-        // the workspace, resolve() already found it and hover showed it. Only
-        // when it found NOTHING does the widget-doc fallback make sense.
-        if !self.index.resolve(word, ns).is_empty() {
+        // TclOO first: if the workspace genuinely defines this name, hover
+        // already showed it and the widget-doc fallback would be noise.
+        //
+        // "Genuinely" is load-bearing. `index.resolve` falls back to a
+        // last-segment match, so a plain `proc configure` / `proc get` /
+        // `proc insert` ANYWHERE in the tree would otherwise suppress the
+        // Tk documentation for that subcommand across the whole workspace —
+        // and those are the most common proc names there are. A TclOO
+        // method IS the intended target of a `$obj sub ...` dispatch; a
+        // proc reached only by tail-match almost never is.
+        let defers = self.index.resolve(word, ns).iter().any(|(_, d)| {
+            matches!(
+                d.kind,
+                TclKind::Method | TclKind::Constructor | TclKind::Destructor
+            ) || d.qname == format!("::{word}")
+                || (ns != "::" && !ns.is_empty() && d.qname == format!("{ns}::{word}"))
+        });
+        if defers {
             return None;
         }
         let doc = self.docs.get(uri)?;
@@ -2653,6 +2667,32 @@ mod tests {
             .widget_command_hover(uri, p, "frobnicate", "::")
             .expect("a dispatch word always gets a hover");
         assert!(md.contains("No Tk widget man page"), "{md}");
+    }
+
+    #[test]
+    fn a_proc_named_like_a_subcommand_does_not_shadow_the_widget_doc() {
+        // `index.resolve` tail-matches, so a plain `proc configure` (or
+        // `get`, `insert`, `delete` — the universal widget subcommands are
+        // also the most common proc names) used to suppress the Tk hover
+        // for `$w configure` across the ENTIRE workspace. Only a real
+        // method should defer.
+        let text = concat!(
+            "proc helper::configure {opts} { return 1 }\n",
+            "set w .top\n",
+            "$w configure -bg red\n",
+        );
+        let uri = "file:///coincide.tcl";
+        let s = server_with(uri, text);
+        let li = s.docs.get(uri).unwrap().line_index();
+        let p = pos_at(text, "$w configure", li, "configure");
+        let md = s
+            .widget_command_hover(uri, p, "configure", "::")
+            .expect("a coincidental proc must not shadow the widget doc");
+        assert!(
+            md.contains("**Widget command**"),
+            "got the proc, not the widget: {md}"
+        );
+        assert!(!md.contains("helper::configure"), "{md}");
     }
 
     #[test]

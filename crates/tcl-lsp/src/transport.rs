@@ -13,9 +13,29 @@
 //! wiring is ours.
 
 use std::io::{self, BufRead, Write};
+use std::thread::JoinHandle;
 
 use crossbeam_channel::bounded;
 use lsp_server::{Connection, Message};
+
+/// The reader and writer threads, kept so `main` can join them on the way
+/// out instead of racing the process exit against the writer's last
+/// flush. `lsp_server::Connection::stdio` returns an `IoThreads` for the
+/// same reason; this is that, minus the fatal-on-bad-frame behaviour.
+pub struct TransportThreads {
+    reader: JoinHandle<()>,
+    writer: JoinHandle<()>,
+}
+
+impl TransportThreads {
+    /// Wait for both threads. The reader is already gone by the time this
+    /// is reached (EOF or `exit`); this is really about letting the
+    /// writer drain every queued response before the process ends.
+    pub fn join(self) {
+        let _ = self.reader.join();
+        let _ = self.writer.join();
+    }
+}
 
 /// Decode one frame body. `None` means "not a valid message — drop it and
 /// keep serving"; the reason goes to stderr, where /api/logs can see it.
@@ -41,13 +61,14 @@ pub fn decode_message(text: &str) -> Option<Message> {
 /// Wire up stdin/stdout as an LSP connection. The reader thread decodes and
 /// skips garbage; the writer thread serializes. Both run for the life of
 /// the process; when `Connection` is dropped the writer drains and exits,
-/// and EOF on stdin ends the reader.
-pub fn stdio_connection() -> Connection {
+/// and EOF on stdin ends the reader. Join the returned handles before
+/// exiting so the writer's last flush is not cut off by process teardown.
+pub fn stdio_connection() -> (Connection, TransportThreads) {
     // `sender` is what the server writes responses/notifications into.
     let (writer_tx, writer_rx) = bounded::<Message>(64);
     let (reader_tx, reader_rx) = bounded::<Message>(64);
 
-    std::thread::Builder::new()
+    let reader = std::thread::Builder::new()
         .name("tcl-lsp-reader".to_string())
         .spawn(move || {
             let stdin = io::stdin();
@@ -67,8 +88,10 @@ pub fn stdio_connection() -> Connection {
                             break;
                         }
                     }
-                    // No parseable Content-Length header: the framing itself
-                    // is unrecoverable, so stop — matching upstream.
+                    // Only a truly unrecoverable stream (no header at all
+                    // within the resync window, or a broken pipe) ends the
+                    // reader. A single bad header block is skipped by
+                    // read_frame itself.
                     Err(e) => {
                         eprintln!("tcl-lsp: stdin framing error, reader stopping: {e}");
                         break;
@@ -79,7 +102,7 @@ pub fn stdio_connection() -> Connection {
         })
         .expect("spawn tcl-lsp reader");
 
-    std::thread::Builder::new()
+    let writer = std::thread::Builder::new()
         .name("tcl-lsp-writer".to_string())
         .spawn(move || {
             let stdout = io::stdout();
@@ -91,38 +114,57 @@ pub fn stdio_connection() -> Connection {
                     break;
                 }
             }
+            let _ = stdout.flush();
         })
         .expect("spawn tcl-lsp writer");
 
-    Connection {
-        sender: writer_tx,
-        receiver: reader_rx,
-    }
+    (
+        Connection {
+            sender: writer_tx,
+            receiver: reader_rx,
+        },
+        TransportThreads { reader, writer },
+    )
 }
 
 /// Read one `Content-Length`-framed body. `Ok(None)` = EOF before a header.
+///
+/// A header block that ends with no parseable `Content-Length` is NOT
+/// fatal — the reader keeps scanning lines for the next real header, so a
+/// stray blank block or a byte-level desync (a previous frame's length
+/// was wrong) resyncs on the next well-formed frame instead of taking the
+/// server down. Only EOF, a broken pipe, or `RESYNC_CAP` bytes of junk
+/// with no header in sight ends it.
 fn read_frame(r: &mut impl BufRead) -> io::Result<Option<String>> {
+    const RESYNC_CAP: usize = 4 * 1024 * 1024;
     let mut len: Option<usize> = None;
     let mut line = String::new();
+    let mut scanned = 0usize;
     loop {
         line.clear();
-        if r.read_line(&mut line)? == 0 {
+        let n = r.read_line(&mut line)?;
+        if n == 0 {
             return Ok(None); // EOF
         }
+        scanned += n;
         let trimmed = line.trim_end().to_ascii_lowercase();
-        if trimmed.is_empty() {
-            break; // end of the header block
-        }
         if let Some(v) = trimmed.strip_prefix("content-length:") {
-            len = v.trim().parse().ok();
+            if let Ok(parsed) = v.trim().parse::<usize>() {
+                len = Some(parsed);
+            }
+            // A present-but-unparseable value: ignore it and keep looking
+            // (this is the desync signature).
+        } else if trimmed.is_empty() && len.is_some() {
+            break; // end of a header block that gave us a length
+        }
+        if scanned > RESYNC_CAP {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "no Content-Length header within the resync window",
+            ));
         }
     }
-    let Some(len) = len else {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "frame without a parseable Content-Length header",
-        ));
-    };
+    let len = len.expect("the loop only breaks once len is Some");
     let mut body = vec![0u8; len];
     r.read_exact(&mut body)?;
     Ok(Some(String::from_utf8_lossy(&body).into_owned()))
@@ -150,5 +192,39 @@ mod tests {
         // Non-JSON entirely, and valid JSON that is not a JSON-RPC message.
         assert!(decode_message("}{ not json").is_none());
         assert!(decode_message(r#"{"this":"is not jsonrpc"}"#).is_none());
+    }
+
+    fn frame(body: &str) -> String {
+        format!("Content-Length: {}\r\n\r\n{body}", body.len())
+    }
+
+    #[test]
+    fn read_frame_reads_one_well_formed_frame() {
+        let wire = frame(r#"{"id":1}"#);
+        let mut r = io::Cursor::new(wire.into_bytes());
+        assert_eq!(read_frame(&mut r).unwrap().as_deref(), Some(r#"{"id":1}"#));
+        assert_eq!(read_frame(&mut r).unwrap(), None); // EOF
+    }
+
+    #[test]
+    fn a_header_block_with_no_content_length_is_skipped_not_fatal() {
+        // A stray blank line / an unknown-only header block used to make
+        // read_frame return Err and the reader thread exit. It must
+        // resync on the next real frame instead.
+        let mut wire = String::from("\r\n"); // stray empty block
+        wire.push_str("X-Weird: 1\r\n\r\n"); // unknown-only block
+        wire.push_str(&frame(r#"{"id":2}"#)); // the real frame
+        let mut r = io::Cursor::new(wire.into_bytes());
+        assert_eq!(read_frame(&mut r).unwrap().as_deref(), Some(r#"{"id":2}"#));
+    }
+
+    #[test]
+    fn an_unparseable_content_length_does_not_end_the_reader() {
+        // The byte-desync signature: a `Content-Length:` line whose value
+        // is not a number. Skip it, keep scanning, land on the next frame.
+        let mut wire = String::from("Content-Length: not-a-number\r\n\r\n");
+        wire.push_str(&frame(r#"{"id":3}"#));
+        let mut r = io::Cursor::new(wire.into_bytes());
+        assert_eq!(read_frame(&mut r).unwrap().as_deref(), Some(r#"{"id":3}"#));
     }
 }

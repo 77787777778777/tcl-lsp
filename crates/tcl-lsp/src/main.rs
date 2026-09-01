@@ -22,12 +22,14 @@ fn main() -> Result<()> {
 
     // Our transport, not `lsp_server::Connection::stdio`: one malformed
     // frame must not take the process down. See transport.rs.
-    let connection = transport::stdio_connection();
+    let (connection, threads) = transport::stdio_connection();
     let result = server::run(&connection);
 
     // Dropping the Connection's sender ends the writer thread; the reader
     // stops when stdin hits EOF (the editor's side of the pipe closing).
+    // Join both so the writer flushes its last response before we exit.
     drop(connection);
+    threads.join();
     result?;
     eprintln!("tcl-lsp exiting");
     Ok(())
